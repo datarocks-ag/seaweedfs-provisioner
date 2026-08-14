@@ -1,0 +1,22 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "AppServiceReadWriteDocuments",
+      "Effect": "Allow",
+      "Principal": {
+        "AWS": ["arn:aws:iam:::user/app-service"]
+      },
+      "Action": [
+        "s3:ListBucket",
+        "s3:GetObject",
+        "s3:PutObject",
+        "s3:DeleteObject"
+      ],
+      "Resource": [
+        "arn:aws:s3:::documents",
+        "arn:aws:s3:::documents/*"
+      ]
+    }
+  ]
+}

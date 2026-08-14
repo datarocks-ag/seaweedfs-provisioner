@@ -1,0 +1,54 @@
+# Strategy: "update" (default) creates or updates resources.
+#           "create" only creates if missing, skips existing.
+# Set globally or per bucket (bucket strategy overrides global).
+# Applies to buckets only — identities are always written.
+# strategy: "update"
+
+buckets:
+  - name: documents
+  - name: media-assets
+  - name: backups
+    strategy: "create"
+
+# Identities are rendered into the s3.config file SeaweedFS loads at boot
+# (--phase=identities), so they take effect when the cluster starts, not while
+# it is running. Once any identity exists the S3 gateway enforces auth, so an
+# identity with the "Admin" action is required for the cluster phase — and for
+# any other admin access — to work.
+identities:
+  - name: admin
+    credentials:
+      - access_key: ${SEAWEEDFS_ADMIN_ACCESS_KEY}
+        secret_key: ${SEAWEEDFS_ADMIN_SECRET_KEY}
+    actions:
+      - "Admin"
+      - "Read"
+      - "Write"
+      - "List"
+      - "Tagging"
+
+  - name: app-service
+    credentials:
+      - access_key: ${APP_SERVICE_ACCESS_KEY}
+        secret_key: ${APP_SERVICE_SECRET_KEY}
+    actions:
+      - "Read"
+      - "Write"
+      - "List"
+
+  - name: backup-writer
+    credentials:
+      - access_key: ${BACKUP_ACCESS_KEY}
+        secret_key: ${BACKUP_SECRET_KEY}
+    actions:
+      - "Read:backups"
+      - "Write:backups"
+      - "List:backups"
+
+# Bucket policies are read from JSON files on disk, resolved relative to the
+# process working directory — not this file. The container image has no WORKDIR,
+# so paths resolve against "/": mount the directory at /policies to match.
+# A missing or malformed policy file fails the run.
+policies:
+  - bucket: documents
+    file: policies/documents-policy.json
