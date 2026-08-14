@@ -110,6 +110,27 @@ by the provisioner (a different user, with a uid it cannot predict across contai
 unreadable and SeaweedFS exits 255 with `fail to load config file ... permission denied`. This
 was caught by the integration tests; do not tighten the default without re-running them.
 
+### Tristate and merge semantics in bucket settings
+
+Two spots where the obvious implementation is wrong:
+
+- `Bucket.Versioning` is a `*bool`, not a `bool`. An omitted field must leave the bucket alone; a
+  plain `bool` would read as `false` and suspend versioning enabled out of band.
+- `PutBucketLifecycle` replaces the **entire** lifecycle document, so `ensureLifecycle` reads the
+  current rules and merges by rule ID before writing. Writing only the configured rules would
+  delete every rule the provisioner does not manage. Same hazard as the s3.config merge.
+
+Drift comparison (`lifecycleRulesEqual`) is order-independent, and `lifecyclePrefix` reads the
+prefix from either the modern `Filter` or the deprecated top-level `Prefix`, because SeaweedFS
+returns the legacy shape — ignoring it would make every run see drift and rewrite.
+
+### Dry-run
+
+`Options.DryRun` follows `postgres-provisioner`: read-only calls still execute so the preview
+reflects live state, only mutations are skipped. The exception is a bucket that does not exist
+yet — its settings cannot be read, so `previewSettingsForNewBucket` reports intent instead. When
+adding a mutation, guard it with `p.opts.DryRun` and log a "Would ..." line.
+
 ### Config expansion is field-by-field
 
 `config.expandEnvVars` uses a custom regexp, **not** `os.ExpandEnv` (unlike the siblings), and
@@ -172,9 +193,6 @@ five minutes. Integration tests that check credentials build an `s3.Client` dire
 
 ## Project-Specific Notes
 
-- No `--dry-run` / `DRY_RUN` mode, unlike `postgres-provisioner`. If added, follow that pattern:
-  CLI flag takes precedence over env var, read-only queries still execute so the preview reflects
-  live state.
 - Strategy applies to **buckets only** — identities are always written, policies are always
   reconciled against the file. This mirrors `nats-provisioner`, where strategy applies to streams
   but not consumers.

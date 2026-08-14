@@ -3,8 +3,10 @@ package client
 import (
 	"context"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -260,5 +262,172 @@ func TestConnectS3AbortsOnCancelledContext(t *testing.T) {
 
 	if _, err := ConnectS3(ctx, srv.URL, "key", "secret", "us-east-1"); err == nil {
 		t.Fatal("expected an error for a cancelled context")
+	}
+}
+
+func TestGetBucketVersioning(t *testing.T) {
+	c := newTestS3Client(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`<VersioningConfiguration><Status>Enabled</Status></VersioningConfiguration>`))
+	}))
+
+	got, err := c.GetBucketVersioning(context.Background(), "documents")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got != "Enabled" {
+		t.Errorf("status = %q, want Enabled", got)
+	}
+}
+
+// A bucket that never had versioning configured reports an empty status rather
+// than failing, which is what lets the reconciler treat it as "not enabled".
+func TestGetBucketVersioningUnsetReturnsEmpty(t *testing.T) {
+	c := newTestS3Client(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`<VersioningConfiguration></VersioningConfiguration>`))
+	}))
+
+	got, err := c.GetBucketVersioning(context.Background(), "documents")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got != "" {
+		t.Errorf("status = %q, want empty", got)
+	}
+}
+
+func TestPutBucketVersioning(t *testing.T) {
+	tests := []struct {
+		name    string
+		enabled bool
+		want    string
+	}{
+		{"enable", true, "Enabled"},
+		{"suspend", false, "Suspended"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var body string
+			c := newTestS3Client(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				b, _ := io.ReadAll(r.Body)
+				body = string(b)
+				w.WriteHeader(http.StatusOK)
+			}))
+
+			if err := c.PutBucketVersioning(context.Background(), "documents", tt.enabled); err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if !strings.Contains(body, tt.want) {
+				t.Errorf("request body %q should contain %q", body, tt.want)
+			}
+		})
+	}
+}
+
+func TestGetBucketLifecycle(t *testing.T) {
+	c := newTestS3Client(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`<LifecycleConfiguration><Rule>` +
+			`<ID>expire-30d</ID><Status>Enabled</Status>` +
+			`<Filter><Prefix>logs/</Prefix></Filter>` +
+			`<Expiration><Days>30</Days></Expiration>` +
+			`</Rule></LifecycleConfiguration>`))
+	}))
+
+	rules, err := c.GetBucketLifecycle(context.Background(), "documents")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(rules) != 1 {
+		t.Fatalf("expected 1 rule, got %d", len(rules))
+	}
+	if rules[0].ID != "expire-30d" || rules[0].ExpirationDays != 30 {
+		t.Errorf("rule decoded wrong: %+v", rules[0])
+	}
+	if rules[0].Prefix != "logs/" {
+		t.Errorf("prefix = %q, want logs/", rules[0].Prefix)
+	}
+	if !rules[0].Enabled {
+		t.Error("rule should be enabled")
+	}
+}
+
+// SeaweedFS may return the deprecated top-level Prefix instead of a Filter.
+func TestGetBucketLifecycleReadsLegacyPrefix(t *testing.T) {
+	c := newTestS3Client(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`<LifecycleConfiguration><Rule>` +
+			`<ID>legacy</ID><Status>Enabled</Status><Prefix>old/</Prefix>` +
+			`<Expiration><Days>7</Days></Expiration>` +
+			`</Rule></LifecycleConfiguration>`))
+	}))
+
+	rules, err := c.GetBucketLifecycle(context.Background(), "documents")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(rules) != 1 || rules[0].Prefix != "old/" {
+		t.Errorf("legacy prefix not read: %+v", rules)
+	}
+}
+
+// A bucket with no lifecycle config is the normal first-run state.
+func TestGetBucketLifecycleUnsetReturnsNoRules(t *testing.T) {
+	c := newTestS3Client(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		s3Error(w, http.StatusNotFound, "NoSuchLifecycleConfiguration")
+	}))
+
+	rules, err := c.GetBucketLifecycle(context.Background(), "documents")
+	if err != nil {
+		t.Fatalf("an unset lifecycle should not be an error, got %v", err)
+	}
+	if len(rules) != 0 {
+		t.Errorf("expected no rules, got %d", len(rules))
+	}
+}
+
+func TestGetBucketLifecycleServerErrorPropagates(t *testing.T) {
+	c := newTestS3Client(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		s3Error(w, http.StatusForbidden, "AccessDenied")
+	}))
+
+	if _, err := c.GetBucketLifecycle(context.Background(), "documents"); err == nil {
+		t.Fatal("expected a server error to propagate")
+	}
+}
+
+func TestPutBucketLifecycle(t *testing.T) {
+	var body string
+	c := newTestS3Client(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		body = string(b)
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	rules := []LifecycleRule{
+		{ID: "expire-30d", Prefix: "logs/", ExpirationDays: 30, Enabled: true},
+		{ID: "off", Prefix: "", ExpirationDays: 7, Enabled: false},
+	}
+	if err := c.PutBucketLifecycle(context.Background(), "documents", rules); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	for _, want := range []string{"expire-30d", "logs/", "<Days>30</Days>", "Enabled", "Disabled"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("request body should contain %q, got: %s", want, body)
+		}
+	}
+}
+
+func TestPutBucketLifecycleErrorPropagates(t *testing.T) {
+	c := newTestS3Client(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		s3Error(w, http.StatusInternalServerError, "InternalError")
+	}))
+
+	err := c.PutBucketLifecycle(context.Background(), "documents", []LifecycleRule{{ID: "x", ExpirationDays: 1}})
+	if err == nil {
+		t.Fatal("expected an error")
 	}
 }

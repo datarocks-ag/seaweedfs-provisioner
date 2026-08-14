@@ -8,6 +8,8 @@ A Go CLI tool that idempotently provisions SeaweedFS resources (S3 buckets, IAM 
 ## Features
 
 - Idempotent provisioning of S3 buckets, IAM identities, and bucket policies
+- Bucket versioning and object lifecycle (expiration) rules
+- Dry-run mode that previews every mutation against live state
 - YAML config with `${VAR}` environment variable expansion
 - Configurable strategy: `update` (default) or `create` (skip existing)
 - Identities rendered into the `s3.config` document SeaweedFS loads at boot, merged rather than overwritten
@@ -31,7 +33,7 @@ Identities and cluster resources have **opposing ordering requirements**, so pro
 | Phase | Provisions | Requires | Runs |
 |---|---|---|---|
 | `identities` | Identities → `s3.config` | Nothing | **Before** SeaweedFS starts |
-| `cluster` | Buckets, policies | A running cluster | **After** SeaweedFS is healthy |
+| `cluster` | Buckets (incl. versioning, lifecycle), policies | A running cluster | **After** SeaweedFS is healthy |
 | `all` (default) | Both, in that order | A running cluster | Single-shot |
 
 SeaweedFS has no runtime API for this identity model. The `weed iam` server speaks the AWS IAM query protocol, whose model is users, access keys and policy documents — a different shape from the `name` / `credentials` / `actions` schema used here. Identities are therefore provisioned by writing the config file the S3 gateway reads on startup, which means **identity changes take effect when SeaweedFS boots, not while it is running**.
@@ -54,6 +56,7 @@ seaweedfs-provisioner --phase=cluster      # post-boot
 | `SEAWEEDFS_S3_CONFIG_PATH` | conditional | — | Where to write `s3.config`. Required if `identities` are configured |
 | `SEAWEEDFS_S3_CONFIG_MODE` | no | `0644` | Octal file mode for the generated `s3.config` |
 | `SEAWEEDFS_PHASE` | no | `all` | `identities`, `cluster`, or `all` |
+| `DRY_RUN` | no | `false` | Set to `true` to log every mutation as a preview without applying it |
 | `SEAWEEDFS_CONFIG_PATH` | no | `./config.yaml` | Path to YAML config |
 | `LOG_LEVEL` | no | `info` | Log level (debug/info/warn/error) |
 
@@ -64,7 +67,18 @@ Credentials are optional (a SeaweedFS instance with no identities configured ser
 | Flag | Default | Description |
 |---|---|---|
 | `--phase` | `all` (or `SEAWEEDFS_PHASE`) | Provisioning phase. The CLI flag takes precedence over the env var |
+| `--dry-run` | `false` (or `DRY_RUN`) | Log every mutation as a preview without applying it. Read-only calls still run so the preview reflects live state. The CLI flag takes precedence over the env var |
 | `--version` | — | Print version and exit |
+
+## Dry Run
+
+`--dry-run` (or `DRY_RUN=true`) logs what would change without applying anything — no bucket is created, no identity is written to `s3.config`, no policy, versioning or lifecycle is set.
+
+Read-only calls still execute, so the preview reflects live state rather than guessing: existence checks, and current policy, versioning and lifecycle lookups all run. The exception is a bucket that does not exist yet — its settings cannot be read, so the run reports the intended create and the settings that would follow it.
+
+```bash
+seaweedfs-provisioner --phase=cluster --dry-run
+```
 
 ## Strategy
 
@@ -83,7 +97,7 @@ buckets:
     strategy: "update"       # override: always reconcile this bucket
 ```
 
-**Note:** Strategy applies to buckets only. Identities are always written, and bucket policies are always reconciled against the file on disk.
+**Note:** Strategy applies to buckets only. Identities are always written, and bucket policies are always reconciled against the file on disk. `create` on a bucket that already exists also skips its versioning and lifecycle settings, matching how `postgres-provisioner` treats sub-resources.
 
 ## Environment Variable Expansion
 
@@ -102,10 +116,33 @@ Bucket names must be S3-compatible: 3–63 characters, lowercase alphanumerics a
 ```yaml
 buckets:
   - name: documents
+    versioning: true
   - name: media-assets
   - name: backups
     strategy: "create"
+    lifecycle:
+      - id: expire-old-snapshots
+        prefix: "snapshots/"
+        expiration_days: 30
+        status: enabled     # enabled (default) | disabled
 ```
+
+### Versioning
+
+`versioning: true` enables object versioning, `false` suspends it. **Omitting the field leaves the bucket's current setting untouched** — that distinction matters, because a bare `false` would otherwise suspend versioning somebody enabled out of band. The current status is read first, so a bucket already in the desired state is not rewritten.
+
+### Lifecycle
+
+Lifecycle rules expire objects after a number of days, optionally scoped to a key prefix.
+
+| Field | Required | Description |
+|---|---|---|
+| `id` | yes | Rule identifier. Used to match rules for updates, so it cannot be inferred |
+| `expiration_days` | yes | Days after which objects expire; must be > 0 |
+| `prefix` | no | Key prefix the rule applies to; empty means the whole bucket |
+| `status` | no | `enabled` (default) or `disabled` |
+
+S3 replaces the entire lifecycle document on write, so the provisioner reads the current rules first and **merges by `id`** — rules already on the bucket that are not in the config are preserved, keeping it additive. An empty or omitted `lifecycle` list leaves existing rules alone rather than clearing them.
 
 ## Identities
 

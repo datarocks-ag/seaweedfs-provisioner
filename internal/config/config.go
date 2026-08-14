@@ -39,6 +39,32 @@ type Config struct {
 type Bucket struct {
 	Name     string `yaml:"name"`
 	Strategy string `yaml:"strategy"`
+	// Versioning is a pointer so that an omitted field leaves the bucket's
+	// current setting untouched, rather than reading as an explicit "false"
+	// and suspending versioning someone enabled out of band.
+	Versioning *bool           `yaml:"versioning"`
+	Lifecycle  []LifecycleRule `yaml:"lifecycle"`
+}
+
+// LifecycleRule defines an object expiration rule on a bucket.
+type LifecycleRule struct {
+	ID             string `yaml:"id"`
+	Prefix         string `yaml:"prefix"`
+	ExpirationDays int    `yaml:"expiration_days"`
+	// Status is "enabled" (default) or "disabled".
+	Status string `yaml:"status"`
+}
+
+// validRuleStatuses is the allowlist of lifecycle rule status values.
+var validRuleStatuses = map[string]bool{
+	"":         true, // defaults to enabled
+	"enabled":  true,
+	"disabled": true,
+}
+
+// Enabled reports whether the rule should be active.
+func (r LifecycleRule) Enabled() bool {
+	return r.Status != "disabled"
 }
 
 // Credential defines an access key pair for an IAM identity.
@@ -86,6 +112,12 @@ func expandConfig(cfg *Config) {
 		b := &cfg.Buckets[i]
 		b.Name = expandEnvVars(b.Name)
 		b.Strategy = expandEnvVars(b.Strategy)
+		for j := range b.Lifecycle {
+			r := &b.Lifecycle[j]
+			r.ID = expandEnvVars(r.ID)
+			r.Prefix = expandEnvVars(r.Prefix)
+			r.Status = expandEnvVars(r.Status)
+		}
 	}
 
 	for i := range cfg.Identities {
@@ -188,6 +220,45 @@ func validateBuckets(buckets []Bucket) error {
 			return fmt.Errorf("%s.name: duplicate bucket name %q", prefix, b.Name)
 		}
 		names[b.Name] = true
+
+		if err := validateLifecycle(prefix, b.Lifecycle); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func validateLifecycle(bucketPrefix string, rules []LifecycleRule) error {
+	ids := make(map[string]bool)
+
+	for i, r := range rules {
+		prefix := fmt.Sprintf("%s.lifecycle[%d]", bucketPrefix, i)
+
+		// S3 keys rules by ID, and the provisioner compares by ID to decide
+		// whether a rule has drifted, so it cannot be inferred.
+		if r.ID == "" {
+			return fmt.Errorf("%s.id: is required", prefix)
+		}
+		if containsNullByte(r.ID) {
+			return fmt.Errorf("%s.id: contains null byte", prefix)
+		}
+		if ids[r.ID] {
+			return fmt.Errorf("%s.id: duplicate lifecycle rule id %q", prefix, r.ID)
+		}
+		ids[r.ID] = true
+
+		if containsNullByte(r.Prefix) {
+			return fmt.Errorf("%s.prefix: contains null byte", prefix)
+		}
+
+		if !validRuleStatuses[r.Status] {
+			return fmt.Errorf("%s.status: invalid status %q (must be \"enabled\" or \"disabled\")", prefix, r.Status)
+		}
+
+		if r.ExpirationDays <= 0 {
+			return fmt.Errorf("%s.expiration_days: must be greater than 0", prefix)
+		}
 	}
 
 	return nil

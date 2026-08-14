@@ -33,6 +33,11 @@ func (p *Provisioner) ensurePolicy(ctx context.Context, policy config.Policy) er
 		return nil
 	}
 
+	if p.opts.DryRun {
+		slog.Info("Would set bucket policy", "bucket", policy.Bucket, "file", policy.File)
+		return nil
+	}
+
 	slog.Info("Setting bucket policy", "bucket", policy.Bucket, "file", policy.File)
 	if err := p.s3.PutBucketPolicy(ctx, policy.Bucket, desiredPolicy); err != nil {
 		return fmt.Errorf("setting bucket policy: %w", err)

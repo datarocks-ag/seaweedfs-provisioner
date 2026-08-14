@@ -5,9 +5,23 @@ import (
 	"fmt"
 	"log/slog"
 
+	"seaweedfs-provisioner/internal/client"
 	"seaweedfs-provisioner/internal/config"
 	"seaweedfs-provisioner/internal/s3config"
 )
+
+// Options controls provisioner behaviour.
+type Options struct {
+	// DryRun, when true, logs every mutation as a preview instead of applying it.
+	// Read-only calls (existence checks, current policy/versioning/lifecycle
+	// lookups) still run so the preview reflects live state.
+	DryRun bool
+}
+
+// DefaultOptions returns Options with sensible defaults.
+func DefaultOptions() Options {
+	return Options{}
+}
 
 // S3Admin defines the S3 operations needed by the provisioner.
 type S3Admin interface {
@@ -15,6 +29,10 @@ type S3Admin interface {
 	CreateBucket(ctx context.Context, name string) error
 	GetBucketPolicy(ctx context.Context, name string) (string, error)
 	PutBucketPolicy(ctx context.Context, name, policy string) error
+	GetBucketVersioning(ctx context.Context, name string) (string, error)
+	PutBucketVersioning(ctx context.Context, name string, enabled bool) error
+	GetBucketLifecycle(ctx context.Context, name string) ([]client.LifecycleRule, error)
+	PutBucketLifecycle(ctx context.Context, name string, rules []client.LifecycleRule) error
 }
 
 // IdentityStore defines the identity operations needed by the provisioner.
@@ -35,15 +53,17 @@ type Provisioner struct {
 	s3         S3Admin
 	identities IdentityStore
 	cfg        *config.Config
+	opts       Options
 }
 
 // New creates a new Provisioner. Either dependency may be nil when only the
 // other phase is going to be run.
-func New(s3 S3Admin, identities IdentityStore, cfg *config.Config) *Provisioner {
+func New(s3 S3Admin, identities IdentityStore, cfg *config.Config, opts Options) *Provisioner {
 	return &Provisioner{
 		s3:         s3,
 		identities: identities,
 		cfg:        cfg,
+		opts:       opts,
 	}
 }
 

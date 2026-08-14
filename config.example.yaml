@@ -6,9 +6,21 @@
 
 buckets:
   - name: documents
+    # Omit `versioning` entirely to leave the bucket's current setting alone;
+    # setting it to false actively suspends versioning.
+    versioning: true
+
   - name: media-assets
+
   - name: backups
     strategy: "create"
+    # Object expiration rules. Rules are matched by id, and rules already on the
+    # bucket that are not listed here are preserved.
+    lifecycle:
+      - id: expire-old-snapshots
+        prefix: "snapshots/"
+        expiration_days: 30
+        status: enabled   # enabled (default) | disabled
 
 # Identities are rendered into the s3.config file SeaweedFS loads at boot
 # (--phase=identities), so they take effect when the cluster starts, not while

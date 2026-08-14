@@ -181,7 +181,7 @@ buckets:
 
 	ctx := context.Background()
 
-	p := provisioner.New(tc.s3, nil, cfg)
+	p := provisioner.New(tc.s3, nil, cfg, provisioner.DefaultOptions())
 	if err := p.Run(ctx); err != nil {
 		t.Fatalf("first provisioning run failed: %v", err)
 	}
@@ -209,10 +209,10 @@ buckets:
 
 	ctx := context.Background()
 
-	if err := provisioner.New(tc.s3, nil, cfg).Run(ctx); err != nil {
+	if err := provisioner.New(tc.s3, nil, cfg, provisioner.DefaultOptions()).Run(ctx); err != nil {
 		t.Fatalf("first run: %v", err)
 	}
-	if err := provisioner.New(tc.s3, nil, cfg).Run(ctx); err != nil {
+	if err := provisioner.New(tc.s3, nil, cfg, provisioner.DefaultOptions()).Run(ctx); err != nil {
 		t.Fatalf("second (idempotent) run: %v", err)
 	}
 
@@ -240,7 +240,7 @@ buckets:
   - name: pre-existing
 `)
 
-	if err := provisioner.New(tc.s3, nil, cfg).Run(ctx); err != nil {
+	if err := provisioner.New(tc.s3, nil, cfg, provisioner.DefaultOptions()).Run(ctx); err != nil {
 		t.Fatalf("provisioning with pre-existing bucket: %v", err)
 	}
 }
@@ -251,7 +251,7 @@ func TestIntegrationEmptyConfig(t *testing.T) {
 
 	cfg := loadConfig(t, "{}")
 
-	if err := provisioner.New(tc.s3, nil, cfg).Run(context.Background()); err != nil {
+	if err := provisioner.New(tc.s3, nil, cfg, provisioner.DefaultOptions()).Run(context.Background()); err != nil {
 		t.Fatalf("empty config should succeed: %v", err)
 	}
 }
@@ -290,7 +290,7 @@ policies:
     file: policies/documents-policy.json
 `)
 
-	p := provisioner.New(tc.s3, nil, cfg)
+	p := provisioner.New(tc.s3, nil, cfg, provisioner.DefaultOptions())
 	if err := p.ProvisionCluster(ctx); err != nil {
 		t.Fatalf("provisioning example policy failed: %v", err)
 	}
@@ -307,7 +307,7 @@ policies:
 	}
 
 	// Re-running must be a no-op rather than an error.
-	if err := provisioner.New(tc.s3, nil, cfg).ProvisionCluster(ctx); err != nil {
+	if err := provisioner.New(tc.s3, nil, cfg, provisioner.DefaultOptions()).ProvisionCluster(ctx); err != nil {
 		t.Fatalf("second (idempotent) policy run failed: %v", err)
 	}
 }
@@ -340,7 +340,7 @@ identities:
       - "List"
 `)
 
-	if err := provisioner.New(nil, store, cfg).ProvisionIdentities(ctx); err != nil {
+	if err := provisioner.New(nil, store, cfg, provisioner.DefaultOptions()).ProvisionIdentities(ctx); err != nil {
 		t.Fatalf("identity phase failed: %v", err)
 	}
 
@@ -352,7 +352,7 @@ identities:
 buckets:
   - name: identity-access-test
 `)
-	if err := provisioner.New(tc.s3, nil, bucketCfg).ProvisionCluster(ctx); err != nil {
+	if err := provisioner.New(tc.s3, nil, bucketCfg, provisioner.DefaultOptions()).ProvisionCluster(ctx); err != nil {
 		t.Fatalf("cluster phase failed: %v", err)
 	}
 
@@ -390,7 +390,7 @@ identities:
     actions:
       - "Read"
 `)
-	if err := provisioner.New(nil, store, cfg).ProvisionIdentities(ctx); err != nil {
+	if err := provisioner.New(nil, store, cfg, provisioner.DefaultOptions()).ProvisionIdentities(ctx); err != nil {
 		t.Fatalf("identity phase failed: %v", err)
 	}
 
@@ -401,5 +401,117 @@ identities:
 
 	if err := tc.s3.CreateBucket(ctx, "admin-still-works"); err != nil {
 		t.Fatalf("admin identity no longer functional after merge: %v", err)
+	}
+}
+
+// TestIntegrationBucketVersioning verifies that versioning survives a round trip
+// through SeaweedFS, and that a second run detects no drift.
+func TestIntegrationBucketVersioning(t *testing.T) {
+	tc := setupSeaweedFS(t)
+	defer tc.cleanup()
+
+	ctx := context.Background()
+
+	cfg := loadConfig(t, `
+buckets:
+  - name: versioned-bucket
+    versioning: true
+`)
+
+	if err := provisioner.New(tc.s3, nil, cfg, provisioner.DefaultOptions()).ProvisionCluster(ctx); err != nil {
+		t.Fatalf("provisioning versioning failed: %v", err)
+	}
+
+	status, err := tc.s3.GetBucketVersioning(ctx, "versioned-bucket")
+	if err != nil {
+		t.Fatalf("reading back versioning: %v", err)
+	}
+	if status != "Enabled" {
+		t.Fatalf("versioning = %q, want Enabled", status)
+	}
+
+	if err := provisioner.New(tc.s3, nil, cfg, provisioner.DefaultOptions()).ProvisionCluster(ctx); err != nil {
+		t.Fatalf("second (idempotent) versioning run failed: %v", err)
+	}
+}
+
+// TestIntegrationBucketLifecycle verifies expiration rules round-trip, including
+// the prefix, and that re-running detects no drift.
+func TestIntegrationBucketLifecycle(t *testing.T) {
+	tc := setupSeaweedFS(t)
+	defer tc.cleanup()
+
+	ctx := context.Background()
+
+	cfg := loadConfig(t, `
+buckets:
+  - name: lifecycle-bucket
+    lifecycle:
+      - id: expire-logs
+        prefix: "logs/"
+        expiration_days: 30
+`)
+
+	if err := provisioner.New(tc.s3, nil, cfg, provisioner.DefaultOptions()).ProvisionCluster(ctx); err != nil {
+		t.Fatalf("provisioning lifecycle failed: %v", err)
+	}
+
+	rules, err := tc.s3.GetBucketLifecycle(ctx, "lifecycle-bucket")
+	if err != nil {
+		t.Fatalf("reading back lifecycle: %v", err)
+	}
+	if len(rules) != 1 {
+		t.Fatalf("expected 1 rule, got %d: %+v", len(rules), rules)
+	}
+	if rules[0].ID != "expire-logs" {
+		t.Errorf("rule id = %q, want expire-logs", rules[0].ID)
+	}
+	if rules[0].ExpirationDays != 30 {
+		t.Errorf("expiration = %d, want 30", rules[0].ExpirationDays)
+	}
+	if rules[0].Prefix != "logs/" {
+		t.Errorf("prefix = %q, want logs/", rules[0].Prefix)
+	}
+
+	// The drift comparison has to survive whatever shape SeaweedFS returns, or
+	// every run would rewrite the configuration.
+	if err := provisioner.New(tc.s3, nil, cfg, provisioner.DefaultOptions()).ProvisionCluster(ctx); err != nil {
+		t.Fatalf("second (idempotent) lifecycle run failed: %v", err)
+	}
+}
+
+// TestIntegrationDryRunChangesNothing runs a full cluster phase in dry-run mode
+// against a live cluster and asserts nothing was actually provisioned.
+func TestIntegrationDryRunChangesNothing(t *testing.T) {
+	tc := setupSeaweedFS(t)
+	defer tc.cleanup()
+
+	ctx := context.Background()
+	t.Chdir(repoRoot(t))
+
+	cfg := loadConfig(t, `
+buckets:
+  - name: dry-run-bucket
+    versioning: true
+    lifecycle:
+      - id: expire
+        expiration_days: 30
+
+policies:
+  - bucket: dry-run-bucket
+    file: policies/documents-policy.json
+`)
+
+	p := provisioner.New(tc.s3, nil, cfg, provisioner.Options{DryRun: true})
+	if err := p.ProvisionCluster(ctx); err != nil {
+		t.Fatalf("dry run failed: %v", err)
+	}
+
+	exists, err := tc.s3.HeadBucket(ctx, "dry-run-bucket")
+	if err != nil {
+		t.Fatalf("checking bucket: %v", err)
+	}
+	if exists {
+		t.Error("dry run must not create the bucket")
 	}
 }

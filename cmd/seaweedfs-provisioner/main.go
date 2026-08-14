@@ -34,8 +34,19 @@ func main() {
 		`Provisioning phase: "identities" (write s3.config, no cluster needed), `+
 			`"cluster" (buckets and policies, needs a running cluster), or "all" (default). `+
 			`Overrides SEAWEEDFS_PHASE.`)
+	dryRunFlag := flag.Bool("dry-run", false,
+		"Log every mutation as a preview without applying it. Overrides DRY_RUN.")
 	showVersion := flag.Bool("version", false, "Print version and exit")
 	flag.Parse()
+
+	// Distinguishes "-dry-run not passed" from "-dry-run=false", so the flag can
+	// take precedence over the env var only when it was actually given.
+	dryRunSet := false
+	flag.Visit(func(f *flag.Flag) {
+		if f.Name == "dry-run" {
+			dryRunSet = true
+		}
+	})
 
 	if *showVersion {
 		fmt.Println(version)
@@ -58,10 +69,19 @@ func main() {
 		os.Exit(1)
 	}
 
+	dryRun, err := resolveDryRun(*dryRunFlag, dryRunSet)
+	if err != nil {
+		slog.Error("Invalid dry-run setting", "error", err)
+		os.Exit(1)
+	}
+	if dryRun {
+		slog.Info("Dry run: no changes will be applied")
+	}
+
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 
-	if err := run(ctx, phase); err != nil {
+	if err := run(ctx, phase, provisioner.Options{DryRun: dryRun}); err != nil {
 		slog.Error("Provisioning failed", "error", err)
 		os.Exit(1)
 	}
@@ -69,7 +89,26 @@ func main() {
 	slog.Info("seaweedfs-provisioner finished successfully")
 }
 
-func run(ctx context.Context, phase string) error {
+// resolveDryRun resolves the dry-run setting, with the CLI flag taking
+// precedence over DRY_RUN when it was explicitly passed.
+func resolveDryRun(flagValue, flagSet bool) (bool, error) {
+	if flagSet {
+		return flagValue, nil
+	}
+
+	raw := os.Getenv("DRY_RUN")
+	if raw == "" {
+		return false, nil
+	}
+
+	parsed, err := strconv.ParseBool(raw)
+	if err != nil {
+		return false, fmt.Errorf("parsing DRY_RUN %q as a boolean: %w", raw, err)
+	}
+	return parsed, nil
+}
+
+func run(ctx context.Context, phase string, opts provisioner.Options) error {
 	configPath := envOrDefault("SEAWEEDFS_CONFIG_PATH", "./config.yaml")
 
 	slog.Info("Loading configuration", "path", configPath)
@@ -104,7 +143,7 @@ func run(ctx context.Context, phase string) error {
 		s3Admin = s3Client
 	}
 
-	p := provisioner.New(s3Admin, identities, cfg)
+	p := provisioner.New(s3Admin, identities, cfg, opts)
 
 	switch phase {
 	case phaseIdentities:

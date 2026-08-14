@@ -11,6 +11,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
+	"github.com/aws/aws-sdk-go-v2/service/s3/types"
 )
 
 const (
@@ -131,6 +132,115 @@ func (c *S3Client) PutBucketPolicy(ctx context.Context, name, policy string) err
 		return fmt.Errorf("putting bucket policy for %q: %w", name, err)
 	}
 	return nil
+}
+
+// LifecycleRule is a transport-neutral object expiration rule, so the
+// provisioner does not have to depend on AWS SDK types.
+type LifecycleRule struct {
+	ID             string
+	Prefix         string
+	ExpirationDays int32
+	Enabled        bool
+}
+
+// GetBucketVersioning returns "Enabled", "Suspended", or "" when versioning has
+// never been configured on the bucket.
+func (c *S3Client) GetBucketVersioning(ctx context.Context, name string) (string, error) {
+	resp, err := c.Client.GetBucketVersioning(ctx, &s3.GetBucketVersioningInput{
+		Bucket: aws.String(name),
+	})
+	if err != nil {
+		return "", fmt.Errorf("getting versioning for %q: %w", name, err)
+	}
+	return string(resp.Status), nil
+}
+
+// PutBucketVersioning enables or suspends versioning on the bucket.
+func (c *S3Client) PutBucketVersioning(ctx context.Context, name string, enabled bool) error {
+	status := types.BucketVersioningStatusSuspended
+	if enabled {
+		status = types.BucketVersioningStatusEnabled
+	}
+
+	_, err := c.Client.PutBucketVersioning(ctx, &s3.PutBucketVersioningInput{
+		Bucket:                  aws.String(name),
+		VersioningConfiguration: &types.VersioningConfiguration{Status: status},
+	})
+	if err != nil {
+		return fmt.Errorf("setting versioning for %q: %w", name, err)
+	}
+	return nil
+}
+
+// GetBucketLifecycle returns the bucket's expiration rules. A bucket with no
+// lifecycle configuration yields no rules rather than an error.
+func (c *S3Client) GetBucketLifecycle(ctx context.Context, name string) ([]LifecycleRule, error) {
+	resp, err := c.Client.GetBucketLifecycleConfiguration(ctx, &s3.GetBucketLifecycleConfigurationInput{
+		Bucket: aws.String(name),
+	})
+	if err != nil {
+		if isNotFoundError(err) || isNoSuchLifecycleError(err) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("getting lifecycle for %q: %w", name, err)
+	}
+
+	rules := make([]LifecycleRule, 0, len(resp.Rules))
+	for _, r := range resp.Rules {
+		rule := LifecycleRule{
+			ID:      aws.ToString(r.ID),
+			Enabled: r.Status == types.ExpirationStatusEnabled,
+		}
+		if r.Expiration != nil {
+			rule.ExpirationDays = aws.ToInt32(r.Expiration.Days)
+		}
+		rule.Prefix = lifecyclePrefix(r)
+		rules = append(rules, rule)
+	}
+	return rules, nil
+}
+
+// lifecyclePrefix reads the rule prefix from either the modern filter or the
+// deprecated top-level field, since SeaweedFS may return either shape.
+func lifecyclePrefix(r types.LifecycleRule) string {
+	if r.Filter != nil && r.Filter.Prefix != nil {
+		return *r.Filter.Prefix
+	}
+	// Deprecated in the S3 API, but SeaweedFS still returns this shape, and
+	// ignoring it would make every run see drift and rewrite the configuration.
+	//nolint:staticcheck // intentionally reading the legacy top-level Prefix
+	return aws.ToString(r.Prefix)
+}
+
+// PutBucketLifecycle replaces the bucket's lifecycle configuration.
+func (c *S3Client) PutBucketLifecycle(ctx context.Context, name string, rules []LifecycleRule) error {
+	converted := make([]types.LifecycleRule, 0, len(rules))
+	for _, r := range rules {
+		status := types.ExpirationStatusDisabled
+		if r.Enabled {
+			status = types.ExpirationStatusEnabled
+		}
+		converted = append(converted, types.LifecycleRule{
+			ID:         aws.String(r.ID),
+			Status:     status,
+			Filter:     &types.LifecycleRuleFilter{Prefix: aws.String(r.Prefix)},
+			Expiration: &types.LifecycleExpiration{Days: aws.Int32(r.ExpirationDays)},
+		})
+	}
+
+	_, err := c.Client.PutBucketLifecycleConfiguration(ctx, &s3.PutBucketLifecycleConfigurationInput{
+		Bucket:                 aws.String(name),
+		LifecycleConfiguration: &types.BucketLifecycleConfiguration{Rules: converted},
+	})
+	if err != nil {
+		return fmt.Errorf("setting lifecycle for %q: %w", name, err)
+	}
+	return nil
+}
+
+// isNoSuchLifecycleError checks if the error indicates no lifecycle is configured.
+func isNoSuchLifecycleError(err error) bool {
+	return strings.Contains(err.Error(), "NoSuchLifecycleConfiguration")
 }
 
 // isNotFoundError checks if the error is a 404/NotFound type.

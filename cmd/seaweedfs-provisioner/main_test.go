@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"seaweedfs-provisioner/internal/config"
+	"seaweedfs-provisioner/internal/provisioner"
 	"seaweedfs-provisioner/internal/s3config"
 )
 
@@ -115,7 +116,7 @@ func TestNewIdentityStoreRejectsInvalidMode(t *testing.T) {
 func TestRunRejectsMissingConfigFile(t *testing.T) {
 	t.Setenv("SEAWEEDFS_CONFIG_PATH", filepath.Join(t.TempDir(), "absent.yaml"))
 
-	if err := run(context.Background(), phaseIdentities); err == nil {
+	if err := run(context.Background(), phaseIdentities, provisioner.Options{}); err == nil {
 		t.Fatal("expected an error for a missing config file")
 	}
 }
@@ -151,7 +152,7 @@ identities:
 	// because the identity phase must never construct an S3 client.
 	t.Setenv("SEAWEEDFS_S3_ENDPOINT", "http://127.0.0.1:1")
 
-	if err := run(context.Background(), phaseIdentities); err != nil {
+	if err := run(context.Background(), phaseIdentities, provisioner.Options{}); err != nil {
 		t.Fatalf("identity phase failed: %v", err)
 	}
 
@@ -195,7 +196,78 @@ func TestRunClusterPhaseRequiresReachableEndpoint(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	if err := run(ctx, phaseCluster); err == nil {
+	if err := run(ctx, phaseCluster, provisioner.Options{}); err == nil {
 		t.Fatal("expected an error when the endpoint is unreachable")
+	}
+}
+
+func TestResolveDryRun(t *testing.T) {
+	tests := []struct {
+		name      string
+		flagValue bool
+		flagSet   bool
+		env       string
+		want      bool
+		wantErr   bool
+	}{
+		{name: "unset everywhere", want: false},
+		{name: "env true", env: "true", want: true},
+		{name: "env 1", env: "1", want: true},
+		{name: "env false", env: "false", want: false},
+		// Matching postgres-provisioner: the flag wins when explicitly passed.
+		{name: "flag overrides env", flagValue: true, flagSet: true, env: "false", want: true},
+		{name: "flag false overrides env true", flagValue: false, flagSet: true, env: "true", want: false},
+		{name: "invalid env", env: "maybe", wantErr: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("DRY_RUN", tt.env)
+
+			got, err := resolveDryRun(tt.flagValue, tt.flagSet)
+			if tt.wantErr {
+				if err == nil {
+					t.Fatalf("expected an error for DRY_RUN=%q", tt.env)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if got != tt.want {
+				t.Errorf("got %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+// A dry run of the identity phase must leave no file behind.
+func TestRunIdentitiesPhaseDryRunWritesNothing(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.yaml")
+	configYAML := `
+identities:
+  - name: app-service
+    credentials:
+      - access_key: key
+        secret_key: secret
+    actions:
+      - "Read"
+`
+	if err := os.WriteFile(configPath, []byte(configYAML), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	s3ConfigPath := filepath.Join(dir, "s3.config")
+	t.Setenv("SEAWEEDFS_CONFIG_PATH", configPath)
+	t.Setenv("SEAWEEDFS_S3_CONFIG_PATH", s3ConfigPath)
+	t.Setenv("SEAWEEDFS_S3_CONFIG_MODE", "")
+
+	if err := run(context.Background(), phaseIdentities, provisioner.Options{DryRun: true}); err != nil {
+		t.Fatalf("dry run failed: %v", err)
+	}
+
+	if _, err := os.Stat(s3ConfigPath); !os.IsNotExist(err) {
+		t.Error("dry run must not write s3.config")
 	}
 }

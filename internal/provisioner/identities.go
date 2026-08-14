@@ -10,8 +10,6 @@ import (
 )
 
 func (p *Provisioner) ensureIdentity(ctx context.Context, identity config.Identity) error {
-	slog.Info("Writing identity", "name", identity.Name)
-
 	creds := make([]s3config.Credential, len(identity.Credentials))
 	for i, c := range identity.Credentials {
 		creds[i] = s3config.Credential{
@@ -26,6 +24,16 @@ func (p *Provisioner) ensureIdentity(ctx context.Context, identity config.Identi
 		Actions:     identity.Actions,
 	}
 
+	if p.opts.DryRun {
+		slog.Info("Would write identity",
+			"name", identity.Name,
+			"credentials", len(identity.Credentials),
+			"actions", len(identity.Actions),
+		)
+		return nil
+	}
+
+	slog.Info("Writing identity", "name", identity.Name)
 	if err := p.identities.PutIdentity(ctx, storeIdentity); err != nil {
 		return fmt.Errorf("writing identity: %w", err)
 	}

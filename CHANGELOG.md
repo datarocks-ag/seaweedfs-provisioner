@@ -41,8 +41,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- **`--phase` and `--version` CLI flags.** The `--phase` flag takes precedence over
-  `SEAWEEDFS_PHASE`, matching the flag/env precedence used by `postgres-provisioner`.
+- **`--phase`, `--dry-run` and `--version` CLI flags.** `--phase` and `--dry-run` take precedence
+  over `SEAWEEDFS_PHASE` and `DRY_RUN`, matching the flag/env precedence used by
+  `postgres-provisioner`.
+- **Dry-run mode** (`--dry-run` / `DRY_RUN`) — logs every mutation as a preview without applying
+  it: no bucket created, no identity written, no policy, versioning or lifecycle set. Read-only
+  calls still execute so the preview reflects live state. The one gap is a bucket that does not
+  exist yet, whose settings cannot be read, so the run reports the intended create and the
+  settings that would follow it.
+- **`buckets[].versioning`** — enables or suspends object versioning. Modelled as a tristate: an
+  omitted field leaves the bucket's current setting untouched, because a bare `false` would
+  otherwise suspend versioning that was enabled out of band.
+- **`buckets[].lifecycle`** — object expiration rules with `id`, `expiration_days`, and optional
+  `prefix` and `status`. S3 replaces the whole lifecycle document on write, so the provisioner
+  reads the current rules and merges by `id`, preserving rules it does not manage; an omitted list
+  leaves existing rules alone rather than clearing them. Drift comparison is order-independent and
+  reads the prefix from either the modern filter or the deprecated top-level field, since SeaweedFS
+  returns the legacy shape and ignoring it would rewrite the configuration on every run.
+  Both settings were verified to round-trip through a live SeaweedFS gateway.
 - **`SEAWEEDFS_S3_CONFIG_MODE`** to control the generated file's permissions. The default
   is `0644` rather than `0600` because the official SeaweedFS image drops privileges to an
   unprivileged `seaweed` user before starting the gateway; a `0600` file written by the

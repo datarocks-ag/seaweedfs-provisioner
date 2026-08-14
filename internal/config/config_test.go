@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -504,4 +505,141 @@ func writeTempConfig(t *testing.T, content string) string {
 		t.Fatalf("writing temp config: %v", err)
 	}
 	return path
+}
+
+// --- versioning and lifecycle ---
+
+// An omitted `versioning` key must stay distinguishable from an explicit false,
+// so the provisioner can leave the bucket alone rather than suspending it.
+func TestLoadVersioningTristate(t *testing.T) {
+	tests := []struct {
+		name string
+		yaml string
+		want *bool
+	}{
+		{"omitted", "buckets:\n  - name: docs\n", nil},
+		{"true", "buckets:\n  - name: docs\n    versioning: true\n", boolPtr(true)},
+		{"false", "buckets:\n  - name: docs\n    versioning: false\n", boolPtr(false)},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg, err := Load(writeTempConfig(t, tt.yaml))
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			got := cfg.Buckets[0].Versioning
+			switch {
+			case tt.want == nil && got != nil:
+				t.Errorf("expected nil, got %v", *got)
+			case tt.want != nil && got == nil:
+				t.Errorf("expected %v, got nil", *tt.want)
+			case tt.want != nil && got != nil && *got != *tt.want:
+				t.Errorf("got %v, want %v", *got, *tt.want)
+			}
+		})
+	}
+}
+
+func boolPtr(b bool) *bool { return &b }
+
+func TestValidateLifecycleRules(t *testing.T) {
+	tests := []struct {
+		name    string
+		yaml    string
+		wantErr string
+	}{
+		{
+			name: "valid rule",
+			yaml: "buckets:\n  - name: docs\n    lifecycle:\n      - id: expire\n        expiration_days: 30\n",
+		},
+		{
+			name: "valid disabled rule",
+			yaml: "buckets:\n  - name: docs\n    lifecycle:\n      - id: expire\n        expiration_days: 30\n        status: disabled\n",
+		},
+		{
+			name:    "missing id",
+			yaml:    "buckets:\n  - name: docs\n    lifecycle:\n      - expiration_days: 30\n",
+			wantErr: "lifecycle[0].id",
+		},
+		{
+			name:    "duplicate id",
+			yaml:    "buckets:\n  - name: docs\n    lifecycle:\n      - id: dup\n        expiration_days: 30\n      - id: dup\n        expiration_days: 60\n",
+			wantErr: "duplicate lifecycle rule id",
+		},
+		{
+			name:    "invalid status",
+			yaml:    "buckets:\n  - name: docs\n    lifecycle:\n      - id: expire\n        expiration_days: 30\n        status: paused\n",
+			wantErr: "lifecycle[0].status",
+		},
+		{
+			name:    "zero expiration",
+			yaml:    "buckets:\n  - name: docs\n    lifecycle:\n      - id: expire\n        expiration_days: 0\n",
+			wantErr: "expiration_days",
+		},
+		{
+			name:    "negative expiration",
+			yaml:    "buckets:\n  - name: docs\n    lifecycle:\n      - id: expire\n        expiration_days: -1\n",
+			wantErr: "expiration_days",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := Load(writeTempConfig(t, tt.yaml))
+
+			if tt.wantErr == "" {
+				if err != nil {
+					t.Fatalf("unexpected error: %v", err)
+				}
+				return
+			}
+			if err == nil {
+				t.Fatalf("expected an error mentioning %q", tt.wantErr)
+			}
+			if !strings.Contains(err.Error(), tt.wantErr) {
+				t.Errorf("error %q should mention %q", err, tt.wantErr)
+			}
+		})
+	}
+}
+
+// Every string field must be walked by expandConfig, or secrets and values in
+// that field silently keep their literal ${VAR} text.
+func TestLifecycleFieldsExpandEnvVars(t *testing.T) {
+	t.Setenv("TEST_RULE_ID", "expanded-id")
+	t.Setenv("TEST_RULE_PREFIX", "expanded/")
+	t.Setenv("TEST_RULE_STATUS", "disabled")
+
+	yaml := "buckets:\n  - name: docs\n    lifecycle:\n" +
+		"      - id: ${TEST_RULE_ID}\n        prefix: ${TEST_RULE_PREFIX}\n" +
+		"        status: ${TEST_RULE_STATUS}\n        expiration_days: 30\n"
+
+	cfg, err := Load(writeTempConfig(t, yaml))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	rule := cfg.Buckets[0].Lifecycle[0]
+	if rule.ID != "expanded-id" {
+		t.Errorf("id = %q, want expanded-id", rule.ID)
+	}
+	if rule.Prefix != "expanded/" {
+		t.Errorf("prefix = %q, want expanded/", rule.Prefix)
+	}
+	if rule.Enabled() {
+		t.Error("status should have expanded to disabled")
+	}
+}
+
+func TestLifecycleRuleEnabledDefault(t *testing.T) {
+	if !(LifecycleRule{}).Enabled() {
+		t.Error("an unset status should default to enabled")
+	}
+	if !(LifecycleRule{Status: "enabled"}).Enabled() {
+		t.Error("explicit enabled should be enabled")
+	}
+	if (LifecycleRule{Status: "disabled"}).Enabled() {
+		t.Error("disabled should not be enabled")
+	}
 }
