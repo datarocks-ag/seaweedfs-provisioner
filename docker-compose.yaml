@@ -1,0 +1,64 @@
+services:
+  # Phase 1 — runs before SeaweedFS exists. Renders the identities from config.yaml
+  # into the s3.config document the S3 gateway loads at boot.
+  seaweedfs-identities:
+    image: ghcr.io/datarocks-ag/seaweedfs-provisioner:latest
+    command: ["--phase=identities"]
+    environment:
+      SEAWEEDFS_CONFIG_PATH: /config.yaml
+      SEAWEEDFS_S3_CONFIG_PATH: /seaweedfs-config/s3.json
+      SEAWEEDFS_ADMIN_ACCESS_KEY: admin-key
+      SEAWEEDFS_ADMIN_SECRET_KEY: admin-secret
+      APP_SERVICE_ACCESS_KEY: app-service-key
+      APP_SERVICE_SECRET_KEY: app-service-secret
+      BACKUP_ACCESS_KEY: backup-key
+      BACKUP_SECRET_KEY: backup-secret
+      LOG_LEVEL: info
+    volumes:
+      - ./config.example.yaml:/config.yaml:ro
+      - seaweedfsconfig:/seaweedfs-config
+
+  seaweedfs:
+    image: chrislusf/seaweedfs:latest
+    command: server -s3 -filer -s3.config=/seaweedfs-config/s3.json
+    depends_on:
+      seaweedfs-identities:
+        condition: service_completed_successfully
+    ports:
+      - "8333:8333"
+      - "8888:8888"
+    volumes:
+      - seaweedfsdata:/data
+      - seaweedfsconfig:/seaweedfs-config:ro
+    healthcheck:
+      # SeaweedFS binds its own container IP, not loopback, so `localhost` is
+      # refused. With s3.config in place the gateway answers unauthenticated
+      # probes with 403, so treat any HTTP status line as "listening".
+      test: ["CMD-SHELL", "wget -q --spider -S http://$$(hostname -i):8333/ 2>&1 | grep -qE 'HTTP/1.[01] (200|403)'"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  # Phase 2 — runs against the live cluster to reconcile buckets and policies.
+  seaweedfs-provisioner:
+    image: ghcr.io/datarocks-ag/seaweedfs-provisioner:latest
+    command: ["--phase=cluster"]
+    depends_on:
+      seaweedfs: { condition: service_healthy }
+    environment:
+      SEAWEEDFS_S3_ENDPOINT: http://seaweedfs:8333
+      SEAWEEDFS_CONFIG_PATH: /config.yaml
+      # The gateway now enforces auth, so this phase authenticates as the admin
+      # identity written during phase 1.
+      SEAWEEDFS_ACCESS_KEY: admin-key
+      SEAWEEDFS_SECRET_KEY: admin-secret
+      LOG_LEVEL: info
+    volumes:
+      - ./config.example.yaml:/config.yaml:ro
+      # Policy paths in the config resolve against the working directory, which is
+      # "/" for the scratch-based image, so `policies/x.json` becomes `/policies/x.json`.
+      - ./policies:/policies:ro
+
+volumes:
+  seaweedfsdata:
+  seaweedfsconfig:
