@@ -319,3 +319,7 @@ volumes:
 ```bash
 docker pull ghcr.io/datarocks-ag/seaweedfs-provisioner:latest
 ```
+
+## License
+
+[MIT](LICENSE) — Copyright (c) 2026 Data Rocks AG
