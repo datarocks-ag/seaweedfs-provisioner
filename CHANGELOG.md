@@ -58,7 +58,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   fails the whole suite; a dedicated test runs the full two-phase flow and asserts that a
   provisioned identity can authenticate against the S3 gateway.
 - Unit tests for the `s3config` package covering merge, replace-by-name, unknown-field
-  preservation, permissions, atomicity and context cancellation.
+  preservation, permissions, atomicity, unwritable targets and context cancellation.
+- Unit tests for the S3 client against an `httptest` stub, pinning the string-matching error
+  classifiers and the behaviour that a missing bucket or unset policy reads as absent rather
+  than failing, plus anonymous connection when credentials are absent.
+- Unit tests for `main`, including a run of the identity phase end to end with no cluster
+  reachable, asserting `${VAR}` expansion survives from YAML through to the rendered file.
 
 ### Removed
 

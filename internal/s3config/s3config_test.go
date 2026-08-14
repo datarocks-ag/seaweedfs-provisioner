@@ -302,6 +302,57 @@ func TestPutIdentityCreatesMissingParentDirectory(t *testing.T) {
 	}
 }
 
+// A path whose parent is a regular file cannot be created, and the failure must
+// surface rather than being swallowed into a "provisioned successfully" run.
+func TestPutIdentityFailsWhenParentIsAFile(t *testing.T) {
+	dir := t.TempDir()
+	blocker := filepath.Join(dir, "blocker")
+	if err := os.WriteFile(blocker, []byte("not a directory"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	s := NewStore(filepath.Join(blocker, "s3.config"), 0)
+
+	if err := s.PutIdentity(context.Background(), identity("app-service", "app-key", "Read")); err == nil {
+		t.Fatal("expected an error when the parent path is a file")
+	}
+}
+
+func TestPutIdentityFailsOnUnwritableDirectory(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root bypasses directory permissions")
+	}
+
+	dir := t.TempDir()
+	locked := filepath.Join(dir, "locked")
+	if err := os.Mkdir(locked, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(locked, 0o700) })
+
+	s := NewStore(filepath.Join(locked, "s3.config"), 0)
+
+	if err := s.PutIdentity(context.Background(), identity("app-service", "app-key", "Read")); err == nil {
+		t.Fatal("expected an error when the directory is not writable")
+	}
+}
+
+// A directory sitting where the config file belongs must not be silently
+// replaced, nor produce a confusing partial write.
+func TestListIdentitiesFailsWhenPathIsADirectory(t *testing.T) {
+	dir := t.TempDir()
+	asDir := filepath.Join(dir, "s3.config")
+	if err := os.Mkdir(asDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+
+	s := NewStore(asDir, 0)
+
+	if _, err := s.ListIdentities(context.Background()); err == nil {
+		t.Fatal("expected an error when the config path is a directory")
+	}
+}
+
 func TestOperationsRespectCancelledContext(t *testing.T) {
 	s := newTestStore(t)
 	ctx, cancel := context.WithCancel(context.Background())
