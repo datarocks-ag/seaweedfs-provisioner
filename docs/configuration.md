@@ -8,7 +8,7 @@ The complete reference for the YAML config file. For a guided introduction, star
 - [Buckets](#buckets): [versioning](#versioning), [lifecycle rules](#lifecycle-rules)
 - [Identities](#identities): [actions](#actions)
 - [Policies](#policies)
-- [Environment variable expansion](#environment-variable-expansion)
+- [Environment variable expansion](#environment-variable-expansion): [unset variables](#unset-variables)
 - [Validation](#validation)
 
 The provisioner reads the file named by `SEAWEEDFS_CONFIG_PATH` (default `./config.yaml`, which
@@ -251,8 +251,8 @@ The rules are deliberately narrow:
 |---|---|
 | `${VAR}`, `VAR` set | The value of `VAR`, inserted as-is. YAML special characters in it need no quoting, because the YAML is already parsed. |
 | `${VAR}`, `VAR` set to an empty string | An empty string. On a required field, validation fails with `is required`. |
-| `${VAR}`, `VAR` not set | **The text `${VAR}` stays, literally.** It passes validation: an unset `${APP_SERVICE_ACCESS_KEY}` becomes the access key `${APP_SERVICE_ACCESS_KEY}` in `s3.config`. |
-| `${VAR:-default}` | Not supported. Treated as a variable named `VAR:-default`, which is normally unset, so the text stays literally. No error. |
+| `${VAR}`, `VAR` not set | **The run fails** with `environment variable "VAR" is not set`, if the current phase uses the field. See [Unset variables](#unset-variables). |
+| `${VAR:-default}` | Not supported. Treated as a variable named `VAR:-default`, which is normally unset, so the run fails even when `VAR` is set. |
 | `$VAR` | Not expanded. |
 | `$${VAR}` | No escape syntax. The `${VAR}` part is expanded and the leading `$` stays. |
 
@@ -268,9 +268,35 @@ The rules are deliberately narrow:
   ``line 5: cannot unmarshal !!str `${DAYS}` into int``.
 - The content of policy files is not expanded.
 
-Because an unset variable is not an error, and the dry-run preview shows only the number of
-credentials, not their values, check the rendered `s3.config` after the identities phase
-before relying on new keys.
+### Unset variables
+
+A `${VAR}` reference to a variable that isn't set stops the run before anything is changed,
+in the phase that uses the field. Each phase checks only its own fields, so a container
+needs only the variables its phase reads:
+
+| Phase | Fields checked for unset variables |
+|---|---|
+| `identities` | Everything under `identities` |
+| `cluster` | Top-level `strategy`, everything under `buckets` and `policies` |
+| `all` | Every field |
+
+A reference in a field the phase doesn't use stays as literal text, and is still validated.
+The cluster phase, for example, runs without the identities' key variables. A bucket named
+`${ENVIRONMENT}-docs`, however, fails the identities phase with
+`invalid bucket name "${ENVIRONMENT}-docs"` when `ENVIRONMENT` isn't set there, so pass
+variables used in bucket names to both phases. The error names
+the field and the variable, and the process exits with code `1`:
+
+```json
+{"level":"ERROR","msg":"Provisioning failed","error":"loading configuration: expanding environment variables: identities[1].credentials[0].secret_key: environment variable \"REPORTS_SECRET_KEY\" is not set"}
+```
+
+The run stops at the first unset variable it finds, and `--dry-run` fails the same way. A
+variable set to an empty string counts as set.
+
+Up to 1.0.0, an unset variable was not an error: `${VAR}` stayed as literal text, passed
+validation, and an unset `${APP_SERVICE_ACCESS_KEY}` became the access key
+`${APP_SERVICE_ACCESS_KEY}` in `s3.config`.
 
 ## Validation
 
@@ -331,13 +357,16 @@ Errors before validation have their own prefixes:
   `open /config.yaml: no such file or directory`.
 - `loading configuration: parsing config YAML: ...` for invalid YAML or a wrong type, for
   example ``yaml: unmarshal errors:\n  line 3: cannot unmarshal !!str `${V}` into bool``.
+- `loading configuration: expanding environment variables: <path>: environment variable "<VAR>" is not set`
+  for an unset variable; see [Unset variables](#unset-variables).
 
 What validation does **not** check:
 
 - **Unknown keys are ignored.** A misspelled key, such as `bukets:` or `credentails:`, is
   silently skipped, and its content with it. A misspelled required key still shows up as
   "is required"; a misspelled optional key doesn't show up at all.
-- Unset `${VAR}` references (see [above](#environment-variable-expansion)).
+- Unset `${VAR}` references in fields the current phase doesn't use (see
+  [Unset variables](#unset-variables)).
 - That buckets in scoped actions or in `policies` are declared or exist.
 - That policy files exist or contain valid JSON. That is checked in the cluster phase.
 - Whether SeaweedFS accepts the values. Errors from SeaweedFS appear during the run.

@@ -187,10 +187,12 @@ it, produces the five-minute retry.
 ## Pitfalls
 
 - **A variable for the new key is missing.** In the identities container, an unset
-  `${REPORTS_ACCESS_KEY_2}` is written into `s3.config` literally. In the test this
+  `${REPORTS_ACCESS_KEY_2}` stops the identities phase with
+  `environment variable "REPORTS_ACCESS_KEY_2" is not set`, and `s3.config` keeps the old
+  keys. With 1.0.0 it was written into `s3.config` literally. In the test with 1.0.0 this
   happened to the admin key: the old pair was removed, the new one was the literal text
-  `${SEAWEEDFS_ADMIN_ACCESS_KEY_2}`, and the cluster phase was locked out. Check the file
-  before you remove the old key, as shown in
+  `${SEAWEEDFS_ADMIN_ACCESS_KEY_2}`, and the cluster phase was locked out. With 1.0.0, check
+  the file before you remove the old key, as shown in
   [Keep access keys out of the config file](keep-access-keys-out-of-the-config.md).
 - **Replacing the key in place.** Changing the values behind `${REPORTS_ACCESS_KEY}` instead
   of adding a second credential is a one-round rotation: between the restart and the client

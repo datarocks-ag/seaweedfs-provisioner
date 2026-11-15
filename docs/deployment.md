@@ -423,8 +423,10 @@ An empty value counts as unset everywhere: the default applies.
 | `LOG_LEVEL` | `info` | all | `debug`, `info`, `warn` or `error`, lowercase. Any other value, including `DEBUG`, means `info`. |
 
 On top of these, the provisioner reads every variable that the config references as `${VAR}`,
-such as `SEAWEEDFS_ADMIN_ACCESS_KEY` in the examples. See
-[Environment variable expansion](configuration.md#environment-variable-expansion).
+such as `SEAWEEDFS_ADMIN_ACCESS_KEY` in the examples. A phase fails if a variable used in its
+own fields is not set: the identities phase needs the identities' variables, the cluster
+phase only those in `strategy`, `buckets` and `policies`. See
+[Unset variables](configuration.md#unset-variables).
 
 There are no `*_FILE` variants of any variable, no session tokens or AWS profiles, and no
 option for TLS client certificates. The image contains the public CA bundle; for a gateway

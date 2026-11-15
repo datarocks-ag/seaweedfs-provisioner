@@ -162,7 +162,7 @@ $ AWS_ACCESS_KEY_ID=<admin-access-key> AWS_SECRET_ACCESS_KEY=<admin-secret-key> 
   | `api error` | Cause |
   |---|---|
   | `SignatureDoesNotMatch` | The access key is known, the secret key is wrong. |
-  | `InvalidAccessKeyId` | SeaweedFS doesn't know the access key: a typo, the identity was written after SeaweedFS started, or `s3.config` holds a literal `${…}` placeholder. |
+  | `InvalidAccessKeyId` | SeaweedFS doesn't know the access key: a typo, or the identity was written after SeaweedFS started. With 1.0.0 also a literal `${…}` placeholder in `s3.config`. |
   | `AccessDenied` | No keys were sent, because `SEAWEEDFS_ACCESS_KEY` or `SEAWEEDFS_SECRET_KEY` is empty. |
 
   After five minutes the run gives up and exits with code 1:
@@ -187,9 +187,11 @@ $ AWS_ACCESS_KEY_ID=<admin-access-key> AWS_SECRET_ACCESS_KEY=<admin-secret-key> 
 - **The identity was written after SeaweedFS started.** A running SeaweedFS answers
   `InvalidAccessKeyId` for a key the identities phase added after SeaweedFS started.
   Restart SeaweedFS; see [Change identities on a running cluster](change-identities-on-a-running-cluster.md).
-- **A placeholder ends up as the key.** If `SEAWEEDFS_ADMIN_ACCESS_KEY` is not set in the
-  identities container, `${SEAWEEDFS_ADMIN_ACCESS_KEY}` is written into `s3.config`
-  literally, and the cluster phase gets `InvalidAccessKeyId`. See
+- **The admin key variable is missing.** If `SEAWEEDFS_ADMIN_ACCESS_KEY` is not set in the
+  identities container, the identities phase fails with
+  `environment variable "SEAWEEDFS_ADMIN_ACCESS_KEY" is not set` and writes nothing. With
+  1.0.0, `${SEAWEEDFS_ADMIN_ACCESS_KEY}` was written into `s3.config` literally instead,
+  and the cluster phase got `InvalidAccessKeyId`. See
   [Keep access keys out of the config file](keep-access-keys-out-of-the-config.md).
 - **Extra fields on identities disappear.** The provisioner keeps identities it does not
   manage and unknown top-level keys such as `accounts`, but it rewrites the identity list

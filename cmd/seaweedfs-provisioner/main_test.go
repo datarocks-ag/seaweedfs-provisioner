@@ -179,6 +179,43 @@ identities:
 	}
 }
 
+// The identities phase must refuse an unset ${VAR} in a credential rather than
+// write the placeholder into s3.config as a working key.
+func TestRunIdentitiesPhaseRejectsUnsetVariable(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.yaml")
+	s3ConfigPath := filepath.Join(dir, "s3.json")
+	yaml := "identities:\n  - name: app-service\n    credentials:\n" +
+		"      - access_key: ${UNSET_APP_KEY}\n        secret_key: s\n    actions: [Read]\n"
+	if err := os.WriteFile(configPath, []byte(yaml), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	os.Unsetenv("UNSET_APP_KEY")
+	t.Setenv("SEAWEEDFS_CONFIG_PATH", configPath)
+	t.Setenv("SEAWEEDFS_S3_CONFIG_PATH", s3ConfigPath)
+
+	err := run(context.Background(), phaseIdentities, provisioner.Options{})
+	if err == nil || !strings.Contains(err.Error(), `"UNSET_APP_KEY" is not set`) {
+		t.Fatalf("expected an unset-variable error, got %v", err)
+	}
+	if _, statErr := os.Stat(s3ConfigPath); !os.IsNotExist(statErr) {
+		t.Errorf("s3.config should not have been written, stat error: %v", statErr)
+	}
+}
+
+func TestPhaseSections(t *testing.T) {
+	tests := map[string]config.Sections{
+		phaseAll:        config.SectionAll,
+		phaseIdentities: config.SectionIdentities,
+		phaseCluster:    config.SectionCluster,
+	}
+	for phase, want := range tests {
+		if got := phaseSections(phase); got != want {
+			t.Errorf("phaseSections(%q) = %v, want %v", phase, got, want)
+		}
+	}
+}
+
 // An empty config in the cluster phase still needs a reachable endpoint, so a
 // dead one must surface as an error rather than silently succeeding.
 func TestRunClusterPhaseRequiresReachableEndpoint(t *testing.T) {

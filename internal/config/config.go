@@ -93,55 +93,134 @@ func containsNullByte(s string) bool {
 
 var envVarPattern = regexp.MustCompile(`\$\{([^}]+)}`)
 
-// expandEnvVars replaces ${VAR} references with their environment variable values.
-func expandEnvVars(s string) string {
-	return envVarPattern.ReplaceAllStringFunc(s, func(match string) string {
+// UnsetEnvVarError reports a ${VAR} reference to a variable that is not set.
+// An empty value counts as set.
+type UnsetEnvVarError struct {
+	Name string
+}
+
+func (e *UnsetEnvVarError) Error() string {
+	return fmt.Sprintf("environment variable %q is not set", e.Name)
+}
+
+// Sections selects the parts of the config a run uses. A ${VAR} reference to
+// an unset variable fails the load only in a selected section; elsewhere it
+// stays literal text, so a container that runs one phase needs only the
+// variables that phase reads.
+type Sections uint8
+
+const (
+	// SectionIdentities is identities, used by the identities phase.
+	SectionIdentities Sections = 1 << iota
+	// SectionCluster is the top-level strategy, buckets and policies, used by
+	// the cluster phase.
+	SectionCluster
+
+	// SectionAll is every section.
+	SectionAll = SectionIdentities | SectionCluster
+)
+
+// expandEnvVars replaces ${VAR} references with their environment variable
+// values. With strict set, a reference to an unset variable is an error:
+// keeping the literal text would pass validation and, in a credential, write
+// the placeholder into s3.config as a working key. Without it, the reference
+// stays as it is.
+func expandEnvVars(s string, strict bool) (string, error) {
+	var unset error
+	expanded := envVarPattern.ReplaceAllStringFunc(s, func(match string) string {
 		varName := envVarPattern.FindStringSubmatch(match)[1]
-		if val, ok := os.LookupEnv(varName); ok {
+		val, ok := os.LookupEnv(varName)
+		if ok {
 			return val
+		}
+		if strict && unset == nil {
+			unset = &UnsetEnvVarError{Name: varName}
 		}
 		return match
 	})
+	if unset != nil {
+		return "", unset
+	}
+	return expanded, nil
 }
 
-// expandConfig walks the config and expands env vars in string fields.
-func expandConfig(cfg *Config) {
-	cfg.Strategy = expandEnvVars(cfg.Strategy)
+// expander expands fields in place and keeps the first error, so expandConfig
+// can walk every field without checking an error after each one.
+type expander struct {
+	strict bool
+	err    error
+}
+
+func (e *expander) expand(path string, field *string) {
+	if e.err != nil {
+		return
+	}
+	expanded, err := expandEnvVars(*field, e.strict)
+	if err != nil {
+		e.err = fmt.Errorf("%s: %w", path, err)
+		return
+	}
+	*field = expanded
+}
+
+// expandConfig walks the config and expands env vars in string fields. Every
+// string field must be listed here, or ${VAR} in it is never expanded.
+func expandConfig(cfg *Config, sections Sections) error {
+	cluster := &expander{strict: sections&SectionCluster != 0}
+	cluster.expand("strategy", &cfg.Strategy)
 
 	for i := range cfg.Buckets {
 		b := &cfg.Buckets[i]
-		b.Name = expandEnvVars(b.Name)
-		b.Strategy = expandEnvVars(b.Strategy)
+		prefix := fmt.Sprintf("buckets[%d]", i)
+		cluster.expand(prefix+".name", &b.Name)
+		cluster.expand(prefix+".strategy", &b.Strategy)
 		for j := range b.Lifecycle {
 			r := &b.Lifecycle[j]
-			r.ID = expandEnvVars(r.ID)
-			r.Prefix = expandEnvVars(r.Prefix)
-			r.Status = expandEnvVars(r.Status)
-		}
-	}
-
-	for i := range cfg.Identities {
-		id := &cfg.Identities[i]
-		id.Name = expandEnvVars(id.Name)
-		for j := range id.Credentials {
-			c := &id.Credentials[j]
-			c.AccessKey = expandEnvVars(c.AccessKey)
-			c.SecretKey = expandEnvVars(c.SecretKey)
-		}
-		for j := range id.Actions {
-			id.Actions[j] = expandEnvVars(id.Actions[j])
+			rulePrefix := fmt.Sprintf("%s.lifecycle[%d]", prefix, j)
+			cluster.expand(rulePrefix+".id", &r.ID)
+			cluster.expand(rulePrefix+".prefix", &r.Prefix)
+			cluster.expand(rulePrefix+".status", &r.Status)
 		}
 	}
 
 	for i := range cfg.Policies {
 		p := &cfg.Policies[i]
-		p.Bucket = expandEnvVars(p.Bucket)
-		p.File = expandEnvVars(p.File)
+		prefix := fmt.Sprintf("policies[%d]", i)
+		cluster.expand(prefix+".bucket", &p.Bucket)
+		cluster.expand(prefix+".file", &p.File)
 	}
+
+	identities := &expander{strict: sections&SectionIdentities != 0}
+	for i := range cfg.Identities {
+		id := &cfg.Identities[i]
+		prefix := fmt.Sprintf("identities[%d]", i)
+		identities.expand(prefix+".name", &id.Name)
+		for j := range id.Credentials {
+			c := &id.Credentials[j]
+			credPrefix := fmt.Sprintf("%s.credentials[%d]", prefix, j)
+			identities.expand(credPrefix+".access_key", &c.AccessKey)
+			identities.expand(credPrefix+".secret_key", &c.SecretKey)
+		}
+		for j := range id.Actions {
+			identities.expand(fmt.Sprintf("%s.actions[%d]", prefix, j), &id.Actions[j])
+		}
+	}
+
+	if cluster.err != nil {
+		return cluster.err
+	}
+	return identities.err
 }
 
 // Load reads and parses a YAML config file, expanding env vars and validating.
+// Every section is used, so any ${VAR} reference to an unset variable fails.
 func Load(path string) (*Config, error) {
+	return LoadSections(path, SectionAll)
+}
+
+// LoadSections is Load for a run that uses only some sections: a ${VAR}
+// reference to an unset variable fails only inside those sections.
+func LoadSections(path string, sections Sections) (*Config, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("reading config file: %w", err)
@@ -152,7 +231,9 @@ func Load(path string) (*Config, error) {
 		return nil, fmt.Errorf("parsing config YAML: %w", err)
 	}
 
-	expandConfig(&cfg)
+	if err := expandConfig(&cfg, sections); err != nil {
+		return nil, fmt.Errorf("expanding environment variables: %w", err)
+	}
 
 	if err := validate(&cfg); err != nil {
 		return nil, fmt.Errorf("validating config: %w", err)

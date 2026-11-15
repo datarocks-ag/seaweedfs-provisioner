@@ -20,12 +20,12 @@ Log output on this page is trimmed to the relevant fields; real lines also carry
 - [Identities and access](#identities-and-access)
   - [Do I have to restart SeaweedFS after changing an identity?](#do-i-have-to-restart-seaweedfs-after-changing-an-identity)
   - [Why does everything get 403 after I added the first identity?](#why-does-everything-get-403-after-i-added-the-first-identity)
-  - [Why does s3.config contain my ${VAR} placeholder instead of the key?](#why-does-s3config-contain-my-var-placeholder-instead-of-the-key)
   - [Will the provisioner overwrite my admin identity or accounts?](#will-the-provisioner-overwrite-my-admin-identity-or-accounts)
   - [Is the bucket in a scoped action like Read:documents checked?](#is-the-bucket-in-a-scoped-action-like-readdocuments-checked)
 - [Configuration errors](#configuration-errors)
   - [Why do I get "SEAWEEDFS_S3_CONFIG_PATH is required when identities are configured"?](#why-do-i-get-seaweedfs_s3_config_path-is-required-when-identities-are-configured)
   - [I misspelled a key and got no error. Why?](#i-misspelled-a-key-and-got-no-error-why)
+  - [Why does the run fail with "environment variable … is not set"?](#why-does-the-run-fail-with-environment-variable--is-not-set)
   - [Can I use ${VAR:-default}?](#can-i-use-var-default)
   - [Can bucket names contain dots?](#can-bucket-names-contain-dots)
   - [Why do I get "no such file or directory" for a policy file in the container?](#why-do-i-get-no-such-file-or-directory-for-a-policy-file-in-the-container)
@@ -229,35 +229,6 @@ Declare an admin identity in the config and pass its keys to the cluster phase a
 Further reading: [Set up the admin identity the provisioner logs in with](howto/set-up-the-admin-identity.md),
 [Step 1: Declare the admin identity](getting-started.md#step-1-declare-the-admin-identity)
 
-### Why does s3.config contain my ${VAR} placeholder instead of the key?
-
-Because the environment variable wasn't set when the provisioner ran; an unset variable is
-left in the config as literal text, and the text passes validation.
-
-The identity then gets `${APP_SERVICE_ACCESS_KEY}` as its access key, which doesn't match
-the key your application sends. Check which variables the identity phase container actually
-receives. With `APP_SERVICE_ACCESS_KEY` and `APP_SERVICE_SECRET_KEY` unset, the run succeeds
-and writes:
-
-```json
-"credentials": [
-  {
-    "accessKey": "${APP_SERVICE_ACCESS_KEY}",
-    "secretKey": "${APP_SERVICE_SECRET_KEY}"
-  }
-]
-```
-
-A variable that is set but empty behaves differently: it expands to an empty string, and
-validation stops the run:
-
-```json
-{"level":"ERROR","msg":"Provisioning failed","error":"loading configuration: validating config: identities[0].credentials[0].access_key: is required"}
-```
-
-Further reading: [Keep access keys out of the config file](howto/keep-access-keys-out-of-the-config.md),
-[Environment variable expansion](configuration.md#environment-variable-expansion)
-
 ### Will the provisioner overwrite my admin identity or accounts?
 
 It doesn't remove or replace them, but it does drop fields it doesn't know from every identity
@@ -391,17 +362,44 @@ A misspelled `expiration_days`, by contrast, fails because the field is required
 Further reading: [Validation](configuration.md#validation),
 [Dry-run](concepts.md#dry-run)
 
-### Can I use ${VAR:-default}?
+### Why does the run fail with "environment variable … is not set"?
 
-No. Only the plain `${VAR}` form is expanded; anything else inside the braces is treated as a
-variable name that doesn't exist and is left as literal text.
+Because a `${VAR}` in a field the phase uses refers to a variable the container doesn't
+have. The run stops before it changes anything, so `s3.config` and the cluster stay as they
+were.
 
-There is no error: `${SEAWEEDFS_ADMIN_ACCESS_KEY:-admin-key}` ends up verbatim in `s3.config`
-as the access key:
+The error names the field and the variable. Here the identities container did not receive
+`APP_SERVICE_ACCESS_KEY`:
 
 ```json
-"accessKey": "${SEAWEEDFS_ADMIN_ACCESS_KEY:-admin-key}",
+{"level":"ERROR","msg":"Provisioning failed","error":"loading configuration: expanding environment variables: identities[1].credentials[0].access_key: environment variable \"APP_SERVICE_ACCESS_KEY\" is not set"}
 ```
+
+Pass the variable to the container that runs this phase. Each phase checks only its own
+fields: the identities phase needs the identities' keys, the cluster phase needs only the
+variables used in `strategy`, `buckets` and `policies`. A variable that is set but empty is
+not reported here; on a required field, validation stops the run with `is required`
+instead.
+
+Up to 1.0.0 this was not an error: the text `${APP_SERVICE_ACCESS_KEY}` was written into
+`s3.config` as the access key.
+
+Further reading: [Unset variables](configuration.md#unset-variables),
+[Keep access keys out of the config file](howto/keep-access-keys-out-of-the-config.md)
+
+### Can I use ${VAR:-default}?
+
+No. Only the plain `${VAR}` form is expanded; anything else inside the braces is treated as
+the name of a variable, which doesn't exist.
+
+So the run fails, even when `SEAWEEDFS_ADMIN_ACCESS_KEY` is set:
+
+```json
+{"level":"ERROR","msg":"Provisioning failed","error":"loading configuration: expanding environment variables: identities[0].credentials[0].access_key: environment variable \"SEAWEEDFS_ADMIN_ACCESS_KEY:-admin-key\" is not set"}
+```
+
+Up to 1.0.0 there was no error, and `${SEAWEEDFS_ADMIN_ACCESS_KEY:-admin-key}` was written
+verbatim into `s3.config` as the access key.
 
 Set defaults where you set the environment, for example in your Compose file or Kubernetes
 manifest.
@@ -544,8 +542,8 @@ No. `--phase=identities` only writes `s3.config` and never connects to S3; that 
 runs before SeaweedFS starts.
 
 It needs the config file, `SEAWEEDFS_S3_CONFIG_PATH` and the environment variables your
-identities reference; an unset one is written to `s3.config` literally, as described under
-[Identities and access](#identities-and-access). The default phase `all` is different: it connects to S3 first, with the
+identities reference; an unset one stops the run, as described under
+[Configuration errors](#configuration-errors). The default phase `all` is different: it connects to S3 first, with the
 full retry, and only then writes identities, so with the cluster down it never writes
 `s3.config`.
 

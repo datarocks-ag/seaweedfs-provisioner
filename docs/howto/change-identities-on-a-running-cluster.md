@@ -213,8 +213,9 @@ $ docker compose exec seaweedfs cat /seaweedfs-config/s3.json
   `Using s3.config for identities` must be the file SeaweedFS reads.
 - **The identities phase needs the keys of every identity.** All `${…}` placeholders in the
   YAML are expanded on every run, so the identities container needs the environment
-  variables for all identities, not only the one you changed. A missing one is written
-  literally; see [Keep access keys out of the config file](keep-access-keys-out-of-the-config.md).
+  variables for all identities, not only the one you changed. A missing one stops the run
+  with `environment variable "<NAME>" is not set`, and `s3.config` stays as it was; see
+  [Keep access keys out of the config file](keep-access-keys-out-of-the-config.md).
 
 ## Further reading
 

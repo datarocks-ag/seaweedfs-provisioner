@@ -1,8 +1,8 @@
 # Keep access keys out of the config file
 
 After this `config.yaml` holds only `${VAR}` placeholders, the keys come from Docker Compose
-or a Kubernetes Secret, and you can tell when a placeholder was written into `s3.config`
-instead of a key.
+or a Kubernetes Secret, and a missing key stops the identities phase before it writes
+`s3.config`.
 
 ## When you need this
 
@@ -16,15 +16,16 @@ keys belong in your secret store; the config should only say where each one goes
   the value of the environment variable `<NAME>`. Access keys, secret keys, identity names
   and actions are expanded, among other string fields. See
   [Environment variable expansion](../configuration.md#environment-variable-expansion).
-- **An unset variable is not an error.** If `<NAME>` is not set, `${<NAME>}` stays in the
-  value as literal text, passes validation, and becomes the real key in `s3.config`. A
-  variable set to an empty string is rejected instead, with `is required`.
+- **An unset variable stops the run.** If `<NAME>` is not set, the phase that uses the field
+  fails with `environment variable "<NAME>" is not set` and writes nothing. A variable set
+  to an empty string is rejected too, with `is required`. Up to 1.0.0, an unset variable
+  was not an error: `${<NAME>}` was written into `s3.config` as the real key.
 - **Only environment variables.** The provisioner has no `<NAME>_FILE` variant and reads no
   secret files. The image is built from `scratch`, so it has no shell either that could
   read a file into a variable. Keys have to arrive as environment variables.
 - **No defaults.** `${<NAME>:-<default>}` is not supported. The whole text, including
-  `:-<default>`, is taken as the variable name, which never exists, so the placeholder is
-  written literally even when `<NAME>` is set.
+  `:-<default>`, is taken as the variable name, which never exists, so the run fails even
+  when `<NAME>` is set.
 
 The keys end up in plain text in `s3.config` anyway, because that is the file SeaweedFS
 reads. To limit who can read that file, see
@@ -32,7 +33,8 @@ reads. To limit who can read that file, see
 
 The examples use the identities `admin` and `reports-app` and the Docker Compose setup from
 [Getting started](../getting-started.md#step-2-render-s3config-and-start-seaweedfs). The
-output was captured with `seaweedfs-provisioner` 1.0.0 on 2026-11-15.
+output was captured on 2026-11-15, with `seaweedfs-provisioner` 1.0.0 and, for the
+unset-variable errors, a build of the release that follows it.
 
 ## Steps
 
@@ -60,8 +62,9 @@ identities:
 ```
 
 Only the identities phase writes keys. The cluster phase loads and validates the same file
-but uses none of these values, so it doesn't need the identity variables. Leave them unset
-there rather than set to an empty string, which fails validation.
+but uses none of these values, so it doesn't need the identity variables and doesn't check
+whether they are set. Leave them unset there rather than set to an empty string, which fails
+validation.
 
 ### 2. Docker Compose: pass the keys from an env file
 
@@ -131,79 +134,57 @@ Reference each key with `secretKeyRef` in the identities init container. With a 
 ```
 
 `secretKeyRef` fails the container start if the Secret or the key doesn't exist (with the
-default `optional: false`), so a typo in the Secret name doesn't silently become a literal
-placeholder. A variable you forget to list still does. The full layout is in
+default `optional: false`). A variable you forget to list fails the identities phase
+instead, as in the next step. The full layout is in
 [Deployment → Kubernetes](../deployment.md#kubernetes).
 
-### 4. Check s3.config for placeholders after the identities phase
+### 4. Read the error when a variable is missing
 
-The identities phase logs the same lines whether a key was expanded or not. Here
-`REPORTS_SECRET_KEY` was not set. Output is trimmed; real lines also carry `time`:
-
-```json
-{"level":"INFO","msg":"Writing identity","name":"reports-app"}
-{"level":"INFO","msg":"Identity written","name":"reports-app","actions":3}
-{"level":"INFO","msg":"seaweedfs-provisioner finished successfully"}
-```
-
-The file shows what happened:
+The identities phase expands every key before it writes anything. Here `REPORTS_SECRET_KEY`
+was not set. Output is trimmed; real lines also carry `time`:
 
 ```json
-    {
-      "name": "reports-app",
-      "credentials": [
-        {
-          "accessKey": "reports-key",
-          "secretKey": "${REPORTS_SECRET_KEY}"
-        }
-      ],
+{"level":"INFO","msg":"Loading configuration","path":"/config.yaml"}
+{"level":"ERROR","msg":"Provisioning failed","error":"loading configuration: expanding environment variables: identities[1].credentials[0].secret_key: environment variable \"REPORTS_SECRET_KEY\" is not set"}
 ```
 
-So search the file for `${` after every identities phase, from a container that mounts the
-`s3.config` volume, such as SeaweedFS:
-
-```console
-$ docker compose exec seaweedfs grep -n '${' /seaweedfs-config/s3.json
-20:          "secretKey": "${REPORTS_SECRET_KEY}"
-```
-
-No output and exit code 1 means every placeholder was expanded. On Kubernetes, run the same
-`grep` with `kubectl exec` in the SeaweedFS pod (not captured).
+The process exits with code `1` and leaves `s3.config` as it was. The path names the field,
+here the secret key of the second identity, and the message names the variable. The run
+stops at the first missing variable, so set it and run again to see the next one. In Docker
+Compose, a failed identities service keeps SeaweedFS from starting through
+`service_completed_successfully`.
 
 ## Check that it works
 
-Run the identities phase, then the `grep` from step 4. It prints nothing:
+Run the identities phase. It ends with `seaweedfs-provisioner finished successfully` and
+exit code `0`:
 
 ```console
 $ docker compose run --rm seaweedfs-identities
-$ docker compose exec seaweedfs grep -n '${' /seaweedfs-config/s3.json
 $ echo $?
-1
+0
 ```
 
-Then log in with each identity's keys, as in
+Then restart SeaweedFS and log in with each identity's keys, as in
 [Give an application its own credentials](give-an-application-its-own-credentials.md).
-`InvalidAccessKeyId` or `SignatureDoesNotMatch` for a key that should work points to a
-placeholder or a value that differs between the identities phase and the client.
+`InvalidAccessKeyId` or `SignatureDoesNotMatch` for a key that should work points to a value
+that differs between the identities phase and the client.
 
 ## Pitfalls
 
-- **A dry run doesn't reveal the placeholder.** `--dry-run` logs only how many credentials
-  each identity has, not their values, so a missing variable looks the same as a set one:
-
-  ```json
-  {"level":"INFO","msg":"Would write identity","name":"reports-app","credentials":1,"actions":3}
-  ```
-
-  Use the `grep` from step 4 instead.
-- **A literal placeholder can lock you out.** If the admin key is the placeholder, the
-  cluster phase gets `InvalidAccessKeyId` and retries for five minutes. In the test this
-  happened during a rotation: the old admin pair was removed and the new one was written as
-  `${SEAWEEDFS_ADMIN_ACCESS_KEY_2}`. Fix the variable, run the identities phase, and restart
-  SeaweedFS. See [Rotate an access key without downtime](rotate-an-access-key.md).
-- **`${<NAME>:-<default>}` is written as is.** With `secret_key: ${REPORTS_SECRET_KEY:-changeme}`
-  and `REPORTS_SECRET_KEY` set, `s3.config` still held
-  `"secretKey": "${REPORTS_SECRET_KEY:-changeme}"`. Use plain `${<NAME>}`.
+- **A dry run catches it too.** `--dry-run` loads the config the same way, so a missing
+  variable fails the preview with the same error.
+- **`${<NAME>:-<default>}` fails even when `<NAME>` is set.** With
+  `secret_key: ${REPORTS_SECRET_KEY:-changeme}` and `REPORTS_SECRET_KEY` set, the run failed
+  with `environment variable "REPORTS_SECRET_KEY:-changeme" is not set`. Use plain
+  `${<NAME>}`.
+- **Version 1.0.0 writes the placeholder.** With 1.0.0, a missing variable is not an error,
+  and `s3.config` holds, for example, `"secretKey": "${REPORTS_SECRET_KEY}"`. If the admin
+  key is the placeholder, the cluster phase gets `InvalidAccessKeyId` and retries for five
+  minutes. Until you upgrade, search the file for `${` after every identities phase, from a
+  container that mounts the `s3.config` volume:
+  `docker compose exec seaweedfs grep -n '${' /seaweedfs-config/s3.json`. No output and exit
+  code `1` means every placeholder was expanded.
 - **An empty variable fails the run.** `REPORTS_SECRET_KEY=` (set, but empty) stops the run
   before anything is written:
 
