@@ -28,6 +28,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- A `${VAR}` reference to an unset environment variable stayed in the value as literal
+  text and passed validation, so a missing key variable wrote the placeholder into
+  `s3.config` as a working access or secret key. The run now fails with
+  `<path>: environment variable "<VAR>" is not set` before changing anything. Each phase
+  checks only the fields it uses, so the cluster phase still runs without the identities'
+  key variables. `${VAR:-default}`, which was never supported, now fails the same way
+  instead of being written verbatim.
 - `policies/documents-policy.json` named its principal as
   `arn:aws:iam:::user/app-service`, which SeaweedFS accepts but never matches, so
   the example policy had no effect. It now uses
