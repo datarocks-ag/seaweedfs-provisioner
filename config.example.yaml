@@ -7,7 +7,8 @@
 buckets:
   - name: documents
     # Omit `versioning` entirely to leave the bucket's current setting alone;
-    # setting it to false actively suspends versioning.
+    # false suspends versioning if it is currently enabled (a bucket that never
+    # had versioning is left as it is).
     versioning: true
 
   - name: media-assets

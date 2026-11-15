@@ -9,8 +9,9 @@ application-level state — S3 buckets, IAM identities, and bucket policies — 
 file. Runs as a one-shot Kubernetes `Job` / init container or Docker Compose init service, then
 exits. No long-running process, no health endpoint.
 
-See [README.md](README.md) for the user-facing contract: phases, environment variables, YAML
-schema, and Docker Compose usage. This file covers what the README does not — the internal
+See [docs/](docs/) for the user-facing contract: phases ([concepts](docs/concepts.md)),
+environment variables and Compose/Kubernetes usage ([deployment](docs/deployment.md)), and the
+YAML schema ([configuration](docs/configuration.md)). This file covers what those do not — the internal
 structure and the constraints that are easy to break.
 
 ## Build & Test Commands
@@ -178,8 +179,8 @@ five minutes. Integration tests that check credentials build an `s3.Client` dire
   than reaching for `errors.As` on AWS error types
 - Integration tests boot SeaweedFS from a config produced by the **production** writer, so a
   schema regression fails the whole suite instead of surfacing at deploy time. Keep it that way
-- Keep `README.md` and `CHANGELOG.md` current — every provisioner in this ecosystem ships both,
-  and the changelog follows Keep a Changelog + SemVer with an `## [Unreleased]` section at the top
+- Keep `README.md`, `docs/` and `CHANGELOG.md` current — every provisioner in this ecosystem ships
+  them; a behavior change updates the affected how-tos and FAQ answers in the same PR, and the changelog follows Keep a Changelog + SemVer with an `## [Unreleased]` section at the top
 
 ## CI / Release
 

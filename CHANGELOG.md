@@ -21,6 +21,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `github.com/docker/docker`, which has open advisories with no fixed release,
   with the `github.com/moby/moby` modules. Test-only; not in the shipped binary.
 - Bump GitHub Actions to their latest majors (#24).
+- Split the user documentation out of the README into `docs/`: getting started,
+  how it works, configuration reference, deployment (now including Kubernetes,
+  exit codes and the real connection-retry behavior), a FAQ, and eight how-to
+  guides. The README keeps a quick start and a documentation index.
+
+### Fixed
+
+- `policies/documents-policy.json` named its principal as
+  `arn:aws:iam:::user/app-service`, which SeaweedFS accepts but never matches, so
+  the example policy had no effect. It now uses
+  `arn:aws:iam::000000000000:user/app-service`.
+- The README's Docker Compose example authenticated the cluster phase with an
+  admin key that its own config never declared, so the run failed after five
+  minutes of retries. The examples in `docs/` declare the admin identity.
+- `config.example.yaml` said `versioning: false` always suspends versioning; it
+  only does so when versioning is currently enabled.
 
 ## [1.0.0] - 2026-08-14
 
