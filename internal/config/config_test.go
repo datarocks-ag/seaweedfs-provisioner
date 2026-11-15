@@ -1,6 +1,7 @@
 package config
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -90,27 +91,104 @@ identities:
 	}
 }
 
-func TestLoadUnresolvedEnvVar(t *testing.T) {
+// An unset variable must fail the load: keeping the literal ${VAR} text would
+// pass validation and write a working credential whose key is the placeholder.
+func TestLoadUnsetEnvVarFails(t *testing.T) {
 	os.Unsetenv("NONEXISTENT_VAR")
+	t.Setenv("SET_VAR", "value")
 
-	yaml := `
-identities:
-  - name: svc
-    credentials:
-      - access_key: ${NONEXISTENT_VAR}
-        secret_key: somesecret
-    actions:
-      - "Read"
-`
-	path := writeTempConfig(t, yaml)
+	tests := []struct {
+		name     string
+		yaml     string
+		wantPath string
+		wantVar  string
+	}{
+		{
+			name: "access key",
+			yaml: "identities:\n  - name: svc\n    credentials:\n" +
+				"      - access_key: ${NONEXISTENT_VAR}\n        secret_key: somesecret\n    actions: [Read]\n",
+			wantPath: "identities[0].credentials[0].access_key",
+			wantVar:  "NONEXISTENT_VAR",
+		},
+		{
+			name:     "part of a value",
+			yaml:     "buckets:\n  - name: docs\n  - name: ${SET_VAR}-${NONEXISTENT_VAR}\n",
+			wantPath: "buckets[1].name",
+			wantVar:  "NONEXISTENT_VAR",
+		},
+		{
+			name:     "default syntax is not supported",
+			yaml:     "policies:\n  - bucket: docs\n    file: ${SET_VAR:-fallback}\n",
+			wantPath: "policies[0].file",
+			wantVar:  "SET_VAR:-fallback",
+		},
+	}
 
-	cfg, err := Load(path)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := Load(writeTempConfig(t, tt.yaml))
+			if err == nil {
+				t.Fatal("expected an error for an unset environment variable")
+			}
+
+			want := tt.wantPath + `: environment variable "` + tt.wantVar + `" is not set`
+			if !strings.Contains(err.Error(), want) {
+				t.Errorf("error %q should contain %q", err, want)
+			}
+
+			var unset *UnsetEnvVarError
+			if !errors.As(err, &unset) || unset.Name != tt.wantVar {
+				t.Errorf("error should wrap *UnsetEnvVarError for %q, got %v", tt.wantVar, err)
+			}
+		})
+	}
+}
+
+// A container that runs one phase gets only the variables that phase reads:
+// the cluster phase never needs the identities' keys, and the reverse.
+func TestLoadSectionsChecksOnlySelectedSections(t *testing.T) {
+	os.Unsetenv("UNSET_KEY")
+	os.Unsetenv("UNSET_ENV")
+
+	identityYAML := "identities:\n  - name: svc\n    credentials:\n" +
+		"      - access_key: ${UNSET_KEY}\n        secret_key: s\n    actions: [Read]\n"
+	clusterYAML := "policies:\n  - bucket: docs\n    file: ${UNSET_ENV}.json\n"
+
+	tests := []struct {
+		name     string
+		yaml     string
+		sections Sections
+		wantErr  bool
+	}{
+		{"identity var in cluster phase", identityYAML, SectionCluster, false},
+		{"identity var in identities phase", identityYAML, SectionIdentities, true},
+		{"cluster var in identities phase", clusterYAML, SectionIdentities, false},
+		{"cluster var in cluster phase", clusterYAML, SectionCluster, true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := LoadSections(writeTempConfig(t, tt.yaml), tt.sections)
+			var unset *UnsetEnvVarError
+			if got := errors.As(err, &unset); got != tt.wantErr {
+				t.Errorf("unset-variable error = %v, want %v (err: %v)", got, tt.wantErr, err)
+			}
+		})
+	}
+}
+
+func TestLoadEmptyEnvVarIsNotUnset(t *testing.T) {
+	t.Setenv("EMPTY_PREFIX", "")
+
+	yaml := "buckets:\n  - name: docs\n    lifecycle:\n" +
+		"      - id: all\n        prefix: ${EMPTY_PREFIX}\n        expiration_days: 30\n"
+
+	cfg, err := Load(writeTempConfig(t, yaml))
 	if err != nil {
 		t.Fatalf("Load() error: %v", err)
 	}
-
-	if cfg.Identities[0].Credentials[0].AccessKey != "${NONEXISTENT_VAR}" {
-		t.Errorf("expected unresolved env var to be kept as-is, got %q", cfg.Identities[0].Credentials[0].AccessKey)
+	if got := cfg.Buckets[0].Lifecycle[0].Prefix; got != "" {
+		t.Errorf("prefix = %q, want empty", got)
 	}
 }
 

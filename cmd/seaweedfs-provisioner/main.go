@@ -108,11 +108,24 @@ func resolveDryRun(flagValue, flagSet bool) (bool, error) {
 	return parsed, nil
 }
 
+// phaseSections returns the config sections a phase uses, so a variable only
+// another phase reads may be unset in this phase's container.
+func phaseSections(phase string) config.Sections {
+	switch phase {
+	case phaseIdentities:
+		return config.SectionIdentities
+	case phaseCluster:
+		return config.SectionCluster
+	default:
+		return config.SectionAll
+	}
+}
+
 func run(ctx context.Context, phase string, opts provisioner.Options) error {
 	configPath := envOrDefault("SEAWEEDFS_CONFIG_PATH", "./config.yaml")
 
 	slog.Info("Loading configuration", "path", configPath)
-	cfg, err := config.Load(configPath)
+	cfg, err := config.LoadSections(configPath, phaseSections(phase))
 	if err != nil {
 		return fmt.Errorf("loading configuration: %w", err)
 	}

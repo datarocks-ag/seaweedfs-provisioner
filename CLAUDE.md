@@ -138,6 +138,11 @@ adding a mutation, guard it with `p.opts.DryRun` and log a "Would ..." line.
 `expandConfig` walks every string field explicitly. **Adding a new string field to a config struct
 requires adding it to `expandConfig` too**, or values in that field will never expand.
 
+An unset `${VAR}` fails the load (`UnsetEnvVarError`), but only in the sections the phase uses
+(`config.LoadSections`, `phaseSections` in `main.go`): the cluster container must not need the
+identities' secrets. Put a new field on the expander of the phase that reads it. Before this,
+an unset variable stayed literal and became a working access key in `s3.config`.
+
 Policy `file:` paths are resolved relative to the process working directory, not the config file.
 
 ### Logging
