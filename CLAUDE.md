@@ -30,7 +30,7 @@ go test -race ./internal/s3config/                            # single package
 go test -race -run TestEnsureBucket ./internal/provisioner/   # single test
 ```
 
-- Go 1.25+, `CGO_ENABLED=0` (pure Go, no C dependencies)
+- Go 1.27+, `CGO_ENABLED=0` (pure Go, no C dependencies)
 - golangci-lint is a `tool` dependency in `go.mod` — always `go tool golangci-lint run`, never a
   globally installed binary
 - Integration tests use `testcontainers-go` with `chrislusf/seaweedfs:latest` and the
@@ -168,7 +168,7 @@ five minutes. Integration tests that check credentials build an `s3.Client` dire
 
 - **No shared libraries** across provisioners — each project is standalone
 - `gopkg.in/yaml.v3` for config parsing
-- Dockerfile: multi-stage `golang:1.25-alpine` builder → `scratch` final image, CA certs copied in
+- Dockerfile: multi-stage `golang:1.27-alpine` builder → `scratch` final image, CA certs copied in
 - `-ldflags="-s -w -X main.version=${VERSION}"` for minimal binary + version injection
 - Errors always wrapped: `fmt.Errorf("<lowercase gerund phrase>: %w", err)`
 - Validation errors are path-prefixed — `identities[0].credentials[1].secret_key: is required`

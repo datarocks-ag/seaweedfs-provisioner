@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- Require Go 1.27.0 (`go.mod`).
+- Require Go 1.27.0 (`go.mod`); build image and CI move to Go 1.27.
 - Bump `golangci-lint` tool to v2.15.0, required to type-check against Go 1.27.
 - Bump dependencies: `go.opentelemetry.io/otel/trace` and `otel/sdk` 1.47.0,
   `otel/exporters/otlp/otlptrace` 1.45.0, `github.com/klauspost/compress`
