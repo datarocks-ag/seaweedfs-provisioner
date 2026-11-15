@@ -10,11 +10,13 @@
 package s3config
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 )
 
 // identitiesKey is the top-level field holding the identity list in s3.config.
@@ -121,6 +123,10 @@ func identitiesFrom(doc map[string]json.RawMessage, path string) ([]Identity, er
 
 // PutIdentity merges identity into the file, replacing any entry with the same
 // name and appending otherwise. All other identities and fields are preserved.
+//
+// Within the replaced entry only name, credentials and actions are set; fields
+// this package does not model, such as `account`, are kept. A credential whose
+// access key is still configured keeps its unknown fields, such as `status`.
 func (s *Store) PutIdentity(ctx context.Context, identity Identity) error {
 	if err := ctx.Err(); err != nil {
 		return err
@@ -131,30 +137,161 @@ func (s *Store) PutIdentity(ctx context.Context, identity Identity) error {
 		return err
 	}
 
-	identities, err := identitiesFrom(doc, s.path)
-	if err != nil {
-		return err
+	var entries []object
+	if raw, ok := doc[identitiesKey]; ok {
+		if err := json.Unmarshal(raw, &entries); err != nil {
+			return fmt.Errorf("parsing identities in %q: %w", s.path, err)
+		}
 	}
 
-	replaced := false
-	for i := range identities {
-		if identities[i].Name == identity.Name {
-			identities[i] = identity
-			replaced = true
+	index := -1
+	for i, entry := range entries {
+		var name string
+		if err := json.Unmarshal(entry["name"], &name); err == nil && name == identity.Name {
+			index = i
 			break
 		}
 	}
-	if !replaced {
-		identities = append(identities, identity)
+
+	var existing object
+	if index >= 0 {
+		existing = entries[index]
+	}
+	merged, err := mergeIdentity(existing, identity)
+	if err != nil {
+		return fmt.Errorf("merging identity %q: %w", identity.Name, err)
+	}
+	if index >= 0 {
+		entries[index] = merged
+	} else {
+		entries = append(entries, merged)
 	}
 
-	encoded, err := json.Marshal(identities)
+	encoded, err := json.Marshal(entries)
 	if err != nil {
 		return fmt.Errorf("encoding identities: %w", err)
 	}
 	doc[identitiesKey] = encoded
 
 	return s.write(doc)
+}
+
+// identityKeyOrder and credentialKeyOrder put the fields SeaweedFS documents
+// first when an entry is encoded; any other fields follow in sorted order.
+var (
+	identityKeyOrder   = []string{"name", "credentials", "actions"}
+	credentialKeyOrder = []string{"accessKey", "secretKey"}
+)
+
+// mergeIdentity sets the managed fields of identity on a copy of existing (nil
+// for a new identity) and returns it.
+func mergeIdentity(existing object, identity Identity) (object, error) {
+	var oldCredentials []object
+	if raw, ok := existing["credentials"]; ok {
+		if err := json.Unmarshal(raw, &oldCredentials); err != nil {
+			return nil, fmt.Errorf("parsing credentials: %w", err)
+		}
+	}
+	byAccessKey := make(map[string]object, len(oldCredentials))
+	for _, c := range oldCredentials {
+		var accessKey string
+		if err := json.Unmarshal(c["accessKey"], &accessKey); err == nil {
+			byAccessKey[accessKey] = c
+		}
+	}
+
+	credentials := make([]object, len(identity.Credentials))
+	for i, c := range identity.Credentials {
+		credential := byAccessKey[c.AccessKey].clone()
+		if err := credential.set("accessKey", c.AccessKey); err != nil {
+			return nil, err
+		}
+		if err := credential.set("secretKey", c.SecretKey); err != nil {
+			return nil, err
+		}
+		credentials[i] = credential
+	}
+
+	encodedCredentials := make([]json.RawMessage, len(credentials))
+	for i, c := range credentials {
+		encodedCredentials[i] = c.encode(credentialKeyOrder)
+	}
+
+	merged := existing.clone()
+	if err := merged.set("name", identity.Name); err != nil {
+		return nil, err
+	}
+	if err := merged.set("credentials", encodedCredentials); err != nil {
+		return nil, err
+	}
+	if err := merged.set("actions", identity.Actions); err != nil {
+		return nil, err
+	}
+	return merged, nil
+}
+
+// object is a JSON object whose values are kept undecoded, so fields this
+// package does not model survive a rewrite unchanged.
+type object map[string]json.RawMessage
+
+func (o object) clone() object {
+	c := make(object, len(o)+3)
+	for k, v := range o {
+		c[k] = v
+	}
+	return c
+}
+
+func (o object) set(key string, value any) error {
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		return fmt.Errorf("encoding %s: %w", key, err)
+	}
+	o[key] = encoded
+	return nil
+}
+
+// MarshalJSON encodes the object with identity keys first, so an entry the
+// provisioner rewrote reads like one written by hand.
+func (o object) MarshalJSON() ([]byte, error) {
+	return o.encode(identityKeyOrder), nil
+}
+
+// encode writes the keys in first, in that order, then the rest sorted.
+func (o object) encode(first []string) json.RawMessage {
+	if o == nil {
+		return json.RawMessage("null")
+	}
+	keys := make([]string, 0, len(o))
+	seen := make(map[string]bool, len(first))
+	for _, k := range first {
+		if _, ok := o[k]; ok {
+			keys = append(keys, k)
+			seen[k] = true
+		}
+	}
+	rest := make([]string, 0, len(o))
+	for k := range o {
+		if !seen[k] {
+			rest = append(rest, k)
+		}
+	}
+	sort.Strings(rest)
+	keys = append(keys, rest...)
+
+	var buf bytes.Buffer
+	buf.WriteByte('{')
+	for i, k := range keys {
+		if i > 0 {
+			buf.WriteByte(',')
+		}
+		name, _ := json.Marshal(k) // a string always encodes
+		buf.Write(name)
+		buf.WriteByte(':')
+		buf.Write(o[k])
+	}
+	buf.WriteByte('}')
+	return buf.Bytes()
 }
 
 // write renders the document and replaces the file atomically, so a partially
