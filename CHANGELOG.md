@@ -15,6 +15,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `otel/exporters/otlp/otlptrace` 1.45.0, `github.com/klauspost/compress`
   1.18.7, `github.com/moby/sys/user` 0.4.1, `github.com/moby/go-archive` 0.3.0
   (#8, #9, #11, #12, #13, #14), plus transitive minimum-version bumps.
+- Bump AWS SDK: `aws-sdk-go-v2` 1.48.0, `credentials` 1.21.0, `service/s3`
+  1.114.10, `smithy-go` 1.28.9 (#21).
+- Bump `testcontainers-go` to 0.45.0 (#22). It replaces
+  `github.com/docker/docker`, which has open advisories with no fixed release,
+  with the `github.com/moby/moby` modules. Test-only; not in the shipped binary.
+- Bump GitHub Actions to their latest majors (#24).
 
 ## [1.0.0] - 2026-08-14
 
