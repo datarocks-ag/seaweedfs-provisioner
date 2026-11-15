@@ -7,24 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.1] - 2026-11-15
+
+Bug fixes, dependency updates and new documentation. No new configuration fields,
+flags or environment variables.
+
+**Check before upgrading:** a `${VAR}` that refers to an unset environment
+variable now fails the run instead of being written into `s3.config` as the
+literal key. If a phase starts failing with `environment variable "<VAR>" is not
+set`, that variable was missing before too, and the affected identity had the
+placeholder as its key. Images tagged `1.0` pick this release up automatically.
+
 ### Changed
 
-- Require Go 1.27.0 (`go.mod`); build image and CI move to Go 1.27.
-- Bump `golangci-lint` tool to v2.15.0, required to type-check against Go 1.27.
+- Require Go 1.27.0 (`go.mod`); build image and CI move to Go 1.27 (#15).
+- Bump `golangci-lint` tool to v2.15.0, required to type-check against Go 1.27 (#15).
 - Bump dependencies: `go.opentelemetry.io/otel/trace` and `otel/sdk` 1.47.0,
   `otel/exporters/otlp/otlptrace` 1.45.0, `github.com/klauspost/compress`
   1.18.7, `github.com/moby/sys/user` 0.4.1, `github.com/moby/go-archive` 0.3.0
-  (#8, #9, #11, #12, #13, #14), plus transitive minimum-version bumps.
+  (#8, #15), plus transitive minimum-version bumps.
 - Bump AWS SDK: `aws-sdk-go-v2` 1.48.0, `credentials` 1.21.0, `service/s3`
-  1.114.10, `smithy-go` 1.28.9 (#21).
-- Bump `testcontainers-go` to 0.45.0 (#22). It replaces
+  1.114.10, `smithy-go` 1.28.9 (#25).
+- Bump `testcontainers-go` to 0.45.0 (#25). It replaces
   `github.com/docker/docker`, which has open advisories with no fixed release,
   with the `github.com/moby/moby` modules. Test-only; not in the shipped binary.
 - Bump GitHub Actions to their latest majors (#24).
 - Split the user documentation out of the README into `docs/`: getting started,
   how it works, configuration reference, deployment (now including Kubernetes,
   exit codes and the real connection-retry behavior), a FAQ, and eight how-to
-  guides. The README keeps a quick start and a documentation index.
+  guides. The README keeps a quick start and a documentation index (#26).
 
 ### Fixed
 
@@ -32,29 +43,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   such as an identity's `account` or a credential's `status`, from every identity in the
   file, including identities absent from the config. Unmanaged identities are now left as
   they are; a configured identity keeps its other fields, and a credential keeps its other
-  fields while its access key is still configured.
+  fields while its access key is still configured (#28).
 - The cluster phase retried rejected credentials (`InvalidAccessKeyId`,
   `SignatureDoesNotMatch`, `AccessDenied`) like an unreachable gateway, so a wrong key failed
   only after the five-minute connection budget with `connection timeout`. It now fails at
-  once with `connecting to SeaweedFS S3: credentials rejected: …`.
+  once with `connecting to SeaweedFS S3: credentials rejected: …` (#28).
 - `SEAWEEDFS_S3_CONFIG_MODE=0` wrote the file with the default `0644` but logged
-  `"mode":"0000"`. The log now shows the mode the file gets.
+  `"mode":"0000"`. The log now shows the mode the file gets (#28).
 - A `${VAR}` reference to an unset environment variable stayed in the value as literal
   text and passed validation, so a missing key variable wrote the placeholder into
   `s3.config` as a working access or secret key. The run now fails with
   `<path>: environment variable "<VAR>" is not set` before changing anything. Each phase
   checks only the fields it uses, so the cluster phase still runs without the identities'
   key variables. `${VAR:-default}`, which was never supported, now fails the same way
-  instead of being written verbatim.
+  instead of being written verbatim (#27).
 - `policies/documents-policy.json` named its principal as
   `arn:aws:iam:::user/app-service`, which SeaweedFS accepts but never matches, so
   the example policy had no effect. It now uses
-  `arn:aws:iam::000000000000:user/app-service`.
+  `arn:aws:iam::000000000000:user/app-service` (#26).
 - The README's Docker Compose example authenticated the cluster phase with an
   admin key that its own config never declared, so the run failed after five
-  minutes of retries. The examples in `docs/` declare the admin identity.
+  minutes of retries. The examples in `docs/` declare the admin identity (#26).
 - `config.example.yaml` said `versioning: false` always suspends versioning; it
-  only does so when versioning is currently enabled.
+  only does so when versioning is currently enabled (#26).
 
 ## [1.0.0] - 2026-08-14
 
@@ -143,5 +154,6 @@ Initial release.
   is refused outright; the check accepts `403` as "listening" because an
   authenticated gateway rejects unauthenticated probes.
 
-[Unreleased]: https://github.com/datarocks-ag/seaweedfs-provisioner/compare/v1.0.0...HEAD
+[Unreleased]: https://github.com/datarocks-ag/seaweedfs-provisioner/compare/v1.0.1...HEAD
+[1.0.1]: https://github.com/datarocks-ag/seaweedfs-provisioner/compare/v1.0.0...v1.0.1
 [1.0.0]: https://github.com/datarocks-ag/seaweedfs-provisioner/releases/tag/v1.0.0

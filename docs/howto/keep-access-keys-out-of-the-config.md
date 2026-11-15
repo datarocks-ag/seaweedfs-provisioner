@@ -34,7 +34,7 @@ reads. To limit who can read that file, see
 The examples use the identities `admin` and `reports-app` and the Docker Compose setup from
 [Getting started](../getting-started.md#step-2-render-s3config-and-start-seaweedfs). The
 output was captured on 2026-11-15, with `seaweedfs-provisioner` 1.0.0 and, for the
-unset-variable errors, a build of the release that follows it.
+unset-variable errors, a build of 1.0.1.
 
 ## Steps
 
