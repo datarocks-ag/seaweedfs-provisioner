@@ -1,0 +1,55 @@
+version: 2
+updates:
+  - package-ecosystem: gomod
+    directory: /
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: "deps"
+    groups:
+      # The AWS SDK modules and smithy-go are released together and depend on each
+      # other's exact versions; separate PRs conflict on go.mod/go.sum.
+      aws-sdk:
+        patterns:
+          - "github.com/aws/*"
+      # testcontainers-go and its modules are released together and must be bumped
+      # together; separate PRs conflict on go.mod/go.sum.
+      testcontainers:
+        patterns:
+          - "github.com/testcontainers/testcontainers-go*"
+      # Security updates mostly hit indirect dependencies pulled in by testcontainers
+      # and the golangci-lint tool (otel, moby, compress). One PR per CVE produced a
+      # pile of conflicting go.sum changes, so batch them.
+      security:
+        applies-to: security-updates
+        patterns:
+          - "*"
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: "ci"
+    groups:
+      # checkout/setup-go/upload-artifact are used in every job of both workflows.
+      github-actions:
+        patterns:
+          - "actions/*"
+      # buildx, build-push, login and metadata are used together in release.yaml.
+      docker-actions:
+        patterns:
+          - "docker/*"
+    ignore:
+      # Dependabot proposed a non-existent major "v2201" for this action in
+      # postgres-provisioner, which broke its release workflow. Major updates need a
+      # manual review.
+      - dependency-name: "vladopajic/go-test-coverage"
+        update-types: ["version-update:semver-major"]
+
+  - package-ecosystem: docker
+    directory: /
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: "docker"
