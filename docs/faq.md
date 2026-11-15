@@ -231,58 +231,64 @@ Further reading: [Set up the admin identity the provisioner logs in with](howto/
 
 ### Will the provisioner overwrite my admin identity or accounts?
 
-It doesn't remove or replace them, but it does drop fields it doesn't know from every identity
-in the file.
+No. It replaces only the identities in your config, and in them only the fields the config
+sets.
 
-Each write reads `s3.config`, replaces the entry whose `name` matches a configured identity
-(or appends a new one) and writes the file back. Identities that aren't in your config, such
-as an admin identity you maintain by hand, stay, and so do other top-level keys such as
-`accounts`. The identity list itself, however, is written back with only `name`,
-`credentials` (`accessKey`, `secretKey`) and `actions`. Any other field on any identity or
-credential, such as an identity's `account` or a credential's `status`, is gone after the
-run, including on identities the provisioner doesn't manage.
+Each write reads `s3.config`, finds the entry whose `name` matches a configured identity (or
+appends a new one), and writes the file back. Identities that aren't in your config, such as
+an admin identity you maintain by hand, stay as they are, and so do other top-level keys such
+as `accounts`. In a configured identity, the provisioner sets `name`, `credentials` and
+`actions` and keeps every other field, such as `account`. A credential whose access key is
+still in the config keeps its other fields, such as `status`; a credential that is no longer
+in the config is removed.
 
-Starting from this file:
-
-```json
-{
-  "identities": [
-    {"name": "admin", "account": {"id": "acc-1"}, "credentials": [{"accessKey": "admin-key", "secretKey": "admin-secret", "status": "Active"}], "actions": ["Admin"]}
-  ],
-  "accounts": [{"id": "acc-1", "displayName": "Ops"}]
-}
-```
-
-an identity phase that writes only `app-service` leaves this behind (the appended
-`app-service` entry trimmed):
+Starting from a file with a hand-made `legacy-importer` and a `reports-app` that carry an
+`account` and a credential `status`, an identities phase that configures only `reports-app`
+with a new action leaves this behind (captured on 2026-11-15; `admin` and `accounts`
+omitted):
 
 ```json
-{
-  "accounts": [
     {
-      "id": "acc-1",
-      "displayName": "Ops"
-    }
-  ],
-  "identities": [
-    {
-      "name": "admin",
+      "name": "legacy-importer",
       "credentials": [
         {
-          "accessKey": "admin-key",
-          "secretKey": "admin-secret"
+          "accessKey": "legacy-key",
+          "secretKey": "legacy-secret",
+          "status": "Active"
         }
       ],
       "actions": [
-        "Admin"
-      ]
+        "Write:invoices"
+      ],
+      "account": {
+        "id": "finance",
+        "displayName": "Finance"
+      }
     },
-    …
-  ]
-}
+    {
+      "name": "reports-app",
+      "credentials": [
+        {
+          "accessKey": "reports-key",
+          "secretKey": "reports-secret",
+          "status": "Active"
+        }
+      ],
+      "actions": [
+        "Read:reports",
+        "List:reports"
+      ],
+      "account": {
+        "id": "finance",
+        "displayName": "Finance"
+      }
+    }
 ```
 
-If your `s3.config` uses such fields, keep a copy and compare after the first run.
+In the entries it writes, the provisioner puts `name`, `credentials` and `actions` first and
+other fields after them, and it sorts the top-level keys alphabetically. Up to 1.0.0, it
+dropped every field other than `name`, `credentials` (`accessKey`, `secretKey`) and
+`actions` from every identity in the file, including identities it doesn't manage.
 
 Further reading: [Why identities are a file](concepts.md#why-identities-are-a-file),
 [Identities](configuration.md#identities)
@@ -465,26 +471,28 @@ Further reading: [Policies](configuration.md#policies),
 
 ### Why does the cluster phase wait 5 minutes and then fail with "connection timeout"?
 
-Because the first S3 call is retried on every error for up to 5 minutes, and a wrong key
-looks the same as a cluster that isn't up yet.
+Because the provisioner couldn't reach the S3 gateway for the whole retry budget of 5
+minutes. The first S3 call is retried while the gateway is unreachable or failing, so that a
+cluster that is still starting doesn't fail the run.
 
-Read the `error` field of the first retry warning: it tells you which case you have. Wrong
-credentials show a 403, for example with a wrong secret key (first lines of the run):
+Read the `error` field of the first retry warning. A gateway that isn't reachable shows
+`connection refused` or a DNS error, here a service name Compose doesn't know:
 
 ```json
-{"level":"INFO","msg":"Connecting to SeaweedFS S3","endpoint":"http://seaweedfs:8333"}
-{"level":"WARN","msg":"SeaweedFS S3 not ready, retrying","attempt":1,"max_retries":15,"delay":1000000000,"error":"operation error S3: ListBuckets, https response error StatusCode: 403, RequestID: 18E845D7F7A03C3E1D7BD375, HostID: , api error SignatureDoesNotMatch: The request signature we calculated does not match the signature you provided. Check your key and signing method."}
+{"level":"WARN","msg":"SeaweedFS S3 not ready, retrying","attempt":1,"max_retries":15,"delay":1000000000,"error":"operation error S3: ListBuckets, https response error StatusCode: 0, RequestID: , HostID: , request send failed, Get \"http://seaweedfs:8333/?x-id=ListBuckets\": dial tcp: lookup seaweedfs on 127.0.0.11:53: no such host"}
 ```
 
-A cluster that isn't reachable shows `connection refused` or a DNS error instead. The same
-403 appears with keys of an identity that lacks `Admin`, or with no keys at all once
-identities exist. The `delay` is in nanoseconds.
-
-After the time budget runs out, the run ends with:
+Check `SEAWEEDFS_S3_ENDPOINT`, the network, and whether SeaweedFS is running. The `delay`
+is in nanoseconds. After the time budget runs out, the run ends with:
 
 ```json
 {"level":"ERROR","msg":"Provisioning failed","error":"connecting to SeaweedFS S3: connection timeout: context deadline exceeded"}
 ```
+
+Wrong or missing keys don't cause the wait: the gateway answers with a `403`, and the run
+fails at once with `credentials rejected` and the S3 error code, such as
+`SignatureDoesNotMatch`. Up to 1.0.0, those were retried too, and a wrong key also ended in
+`connection timeout` after 5 minutes.
 
 Further reading: [Connection retry](deployment.md#connection-retry),
 [Set up the admin identity the provisioner logs in with](howto/set-up-the-admin-identity.md)

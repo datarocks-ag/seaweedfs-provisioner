@@ -149,10 +149,11 @@ How a run applies them:
   [rotating it](howto/rotate-an-access-key.md).
 - **Identities not in the YAML stay** in the file, and so do unknown top-level keys such as
   `accounts`.
-- **Other fields are not kept.** The provisioner re-encodes the identity list with only
-  `name`, `credentials` (`accessKey`, `secretKey`) and `actions`. Any other field, on any
-  identity or credential in the file, including identities the provisioner doesn't manage,
-  is dropped on write.
+- **Other fields are kept.** In a configured identity, the provisioner sets only `name`,
+  `credentials` and `actions`; fields such as `account` stay. A credential keeps fields such
+  as `status` as long as its access key is still configured. Identities it doesn't manage
+  keep all their fields. Up to 1.0.0, every other field on every identity was dropped
+  on write.
 - **Changes need a SeaweedFS restart.** The gateway reads `s3.config` only at startup. See
   [Change identities on a running cluster](howto/change-identities-on-a-running-cluster.md).
 

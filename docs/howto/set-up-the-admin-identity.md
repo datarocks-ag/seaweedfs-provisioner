@@ -25,9 +25,9 @@ identity and wires the same key pair into both phases.
   bucket, versioning, lifecycle and policy calls. An identity with the `Admin` action may do
   all of them. See [Environment variables](../deployment.md#environment-variables) and
   [Actions](../configuration.md#actions).
-- **Every connection error is retried.** The first `ListBuckets` is retried for up to five
-  minutes, and the provisioner does not tell a rejected key from a gateway that is still
-  booting. See [Connection retry](../deployment.md#connection-retry).
+- **A rejected key fails at once.** The first `ListBuckets` is retried for up to five
+  minutes while the gateway is unreachable, but a gateway that rejects the keys fails the
+  run on its first answer. See [Connection retry](../deployment.md#connection-retry).
 
 The examples use the Docker Compose setup from
 [Getting started](../getting-started.md#step-1-declare-the-admin-identity), with the services
@@ -148,13 +148,11 @@ $ AWS_ACCESS_KEY_ID=<admin-access-key> AWS_SECRET_ACCESS_KEY=<admin-secret-key> 
 
 ## Pitfalls
 
-- **The keys don't match.** The cluster phase does not fail, it waits. Each attempt logs a
-  `WARN` line with the error from SeaweedFS, and the delay between attempts (in nanoseconds)
-  doubles up to 30 seconds. With a wrong secret key:
+- **The keys don't match.** The cluster phase fails on the first answer from SeaweedFS and
+  exits with code 1. With a wrong secret key:
 
   ```json
-  {"level":"WARN","msg":"SeaweedFS S3 not ready, retrying","attempt":1,"max_retries":15,"delay":1000000000,"error":"operation error S3: ListBuckets, https response error StatusCode: 403, RequestID: 18E845C3367DCAFE0B9EAD52, HostID: , api error SignatureDoesNotMatch: The request signature we calculated does not match the signature you provided. Check your key and signing method."}
-  {"level":"WARN","msg":"SeaweedFS S3 not ready, retrying","attempt":2,"max_retries":15,"delay":2000000000,"error":"operation error S3: ListBuckets, https response error StatusCode: 403, RequestID: 18E845C37233BAD4AC1FF486, HostID: , api error SignatureDoesNotMatch: The request signature we calculated does not match the signature you provided. Check your key and signing method."}
+  {"level":"ERROR","msg":"Provisioning failed","error":"connecting to SeaweedFS S3: credentials rejected: operation error S3: ListBuckets, https response error StatusCode: 403, RequestID: 18E84B03D7A4764C29EFC2E2, HostID: , api error SignatureDoesNotMatch: The request signature we calculated does not match the signature you provided. Check your key and signing method."}
   ```
 
   The `api error` names the cause:
@@ -165,14 +163,8 @@ $ AWS_ACCESS_KEY_ID=<admin-access-key> AWS_SECRET_ACCESS_KEY=<admin-secret-key> 
   | `InvalidAccessKeyId` | SeaweedFS doesn't know the access key: a typo, or the identity was written after SeaweedFS started. With 1.0.0 also a literal `${…}` placeholder in `s3.config`. |
   | `AccessDenied` | No keys were sent, because `SEAWEEDFS_ACCESS_KEY` or `SEAWEEDFS_SECRET_KEY` is empty. |
 
-  After five minutes the run gives up and exits with code 1:
-
-  ```json
-  {"level":"ERROR","msg":"Provisioning failed","error":"connecting to SeaweedFS S3: connection timeout: context deadline exceeded"}
-  ```
-
-  A `403` comes from a gateway that is up and answering, so waiting doesn't help. Stop the
-  run with Ctrl+C, fix the keys, and start it again.
+  Up to 1.0.0, the run didn't fail here but retried for five minutes, logging each `403` as
+  `SeaweedFS S3 not ready, retrying`, and then ended with `connection timeout`.
 - **The cluster phase logs in with an identity that lacks `Admin`.** The connection
   succeeds, because SeaweedFS answers `ListBuckets` for any known identity, and the run
   fails at the first bucket it isn't allowed to see. Here with the keys of an application
@@ -193,11 +185,11 @@ $ AWS_ACCESS_KEY_ID=<admin-access-key> AWS_SECRET_ACCESS_KEY=<admin-secret-key> 
   1.0.0, `${SEAWEEDFS_ADMIN_ACCESS_KEY}` was written into `s3.config` literally instead,
   and the cluster phase got `InvalidAccessKeyId`. See
   [Keep access keys out of the config file](keep-access-keys-out-of-the-config.md).
-- **Extra fields on identities disappear.** The provisioner keeps identities it does not
-  manage and unknown top-level keys such as `accounts`, but it rewrites the identity list
-  with only `name`, `credentials` (`accessKey`, `secretKey`) and `actions`. A field such as
-  `account` on any identity, or `status` on a credential, is gone after the next identities
-  phase. Keep identities that need those fields in a file the provisioner doesn't write.
+- **Extra fields on identities with 1.0.0.** Up to 1.0.0, the provisioner rewrote every
+  identity with only `name`, `credentials` (`accessKey`, `secretKey`) and `actions`, so a
+  field such as `account` on an identity, or `status` on a credential, was gone after the
+  next identities phase. Later releases keep those fields; see
+  [Will the provisioner overwrite my admin identity or accounts?](../faq.md#will-the-provisioner-overwrite-my-admin-identity-or-accounts)
 - **Changing the admin key.** The YAML and `SEAWEEDFS_ACCESS_KEY` / `SEAWEEDFS_SECRET_KEY`
   have to change together, in a fixed order. See
   [Rotate an access key without downtime](rotate-an-access-key.md), section "Rotate the

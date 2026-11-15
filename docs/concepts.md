@@ -85,7 +85,8 @@ tighten it.
 3. **Prepare what the phase needs.** For `identities` and `all`, if the config declares
    identities, `SEAWEEDFS_S3_CONFIG_PATH` must be set; the `identities` phase never connects
    to SeaweedFS. For `cluster` and `all`, the provisioner connects to the S3 gateway and
-   retries with backoff for up to 5 minutes; see
+   retries with backoff for up to 5 minutes while the gateway is unreachable. Rejected
+   credentials fail the run at once; see
    [Connection retry](deployment.md#connection-retry).
 4. **Provision.** Identities first (`all` and `identities`), then buckets in config order,
    then policies in config order (`all` and `cluster`). Policies come last because they
@@ -114,17 +115,15 @@ out a service. The other side: the config describes a **minimum**, not the exact
 Buckets, identities and rules created by hand or by another tool are left alone, including
 the admin identity in `s3.config` if you created it outside the config.
 
-There are three places where something *does* disappear, because an entry is rewritten as a
+There are two places where something *does* disappear, because an entry is rewritten as a
 whole:
 
 - **A credential or action removed from an identity that is still in the config** is gone
   from `s3.config` after the next `identities` run. The provisioner replaces the identity's
-  whole entry. That's what makes key rotation work; see
-  [Rotate an access key without downtime](howto/rotate-an-access-key.md).
-- **Fields the provisioner doesn't know on any identity** are dropped whenever it writes the
-  file. It keeps only `name`, `credentials` (`accessKey`, `secretKey`) and `actions` for every
-  identity in the list, including identities it doesn't manage. Unknown fields at the top
-  level of the file, such as `accounts`, are kept.
+  credentials and actions. That's what makes key rotation work; see
+  [Rotate an access key without downtime](howto/rotate-an-access-key.md). Other fields of
+  the identity, such as `account`, are kept, and so are other fields of a credential whose
+  access key is still configured, such as `status`.
 - **Lifecycle rule elements other than ID, prefix, expiration in days and status** are dropped
   when the provisioner writes a bucket's lifecycle configuration. This affects rules that
   aren't in the config too, for example a rule with transitions or a tag filter added by hand.

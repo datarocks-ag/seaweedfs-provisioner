@@ -100,6 +100,11 @@ provisioning never worked. Do not "restore" it.
 - Unknown top-level fields (e.g. `accounts`) are preserved by decoding into
   `map[string]json.RawMessage` and only touching `identities`. Decoding into a typed struct
   would silently drop them.
+- The same applies one level down: identities and credentials are kept as raw objects
+  (`s3config.object`), and `PutIdentity` sets only `name`, `credentials` and `actions` on the
+  matching entry. A credential keeps its other fields (e.g. `status`) when its access key is
+  still configured. Up to 1.0.0 the list was round-tripped through the typed `Identity`, which
+  dropped `account` and `status` from every identity in the file.
 - Writes are atomic (temp file + rename) so a booting SeaweedFS never reads a partial document.
 
 ### File permissions are a real constraint, not a detail
@@ -160,10 +165,11 @@ maxDelay     = 30 * time.Second
 totalTimeout = 5 * time.Minute
 ```
 
-Exponential backoff: `math.Pow(2, attempt)` seconds, capped at `maxDelay`, in `ConnectS3`. Note
-the failure mode this creates in tests: an authorization error looks identical to an outage for
-five minutes. Integration tests that check credentials build an `s3.Client` directly instead
-(`s3ClientAs`).
+Exponential backoff: `math.Pow(2, attempt)` seconds, capped at `maxDelay`, in `ConnectS3`.
+Rejected credentials (`InvalidAccessKeyId`, `SignatureDoesNotMatch`, `AccessDenied`, matched by
+`isCredentialsError`) are not retried and return `ErrCredentialsRejected`: the gateway is up, so
+waiting cannot help. Integration tests that check credentials still build an `s3.Client`
+directly (`s3ClientAs`).
 
 ### Exit Codes
 
