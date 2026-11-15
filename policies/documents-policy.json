@@ -5,7 +5,7 @@
       "Sid": "AppServiceReadWriteDocuments",
       "Effect": "Allow",
       "Principal": {
-        "AWS": ["arn:aws:iam:::user/app-service"]
+        "AWS": ["arn:aws:iam::000000000000:user/app-service"]
       },
       "Action": [
         "s3:ListBucket",
