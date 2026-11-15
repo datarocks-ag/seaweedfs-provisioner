@@ -204,6 +204,11 @@ func resolveConfigMode() (os.FileMode, error) {
 	if err != nil {
 		return 0, fmt.Errorf("parsing SEAWEEDFS_S3_CONFIG_MODE %q as an octal file mode: %w", raw, err)
 	}
+	// s3config.NewStore writes a zero mode as the default; resolving it here
+	// makes the startup log report the mode the file actually gets.
+	if parsed == 0 {
+		return s3config.DefaultFileMode, nil
+	}
 	return os.FileMode(parsed), nil
 }
 

@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -262,6 +263,51 @@ func TestConnectS3AbortsOnCancelledContext(t *testing.T) {
 
 	if _, err := ConnectS3(ctx, srv.URL, "key", "secret", "us-east-1"); err == nil {
 		t.Fatal("expected an error for a cancelled context")
+	}
+}
+
+// A gateway that rejects the credentials is up; waiting for it cannot help. The
+// connection must fail on the first answer instead of retrying for the full
+// five-minute budget, which made a typo in a key look like an outage.
+func TestConnectS3FailsFastOnRejectedCredentials(t *testing.T) {
+	for _, code := range []string{"InvalidAccessKeyId", "SignatureDoesNotMatch", "AccessDenied"} {
+		t.Run(code, func(t *testing.T) {
+			var requests atomic.Int32
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				requests.Add(1)
+				s3Error(w, http.StatusForbidden, code)
+			}))
+			t.Cleanup(srv.Close)
+
+			_, err := ConnectS3(context.Background(), srv.URL, "key", "secret", "us-east-1")
+			if !errors.Is(err, ErrCredentialsRejected) {
+				t.Fatalf("expected ErrCredentialsRejected, got %v", err)
+			}
+			if !strings.Contains(err.Error(), code) {
+				t.Errorf("error %q should name the S3 error code %s", err, code)
+			}
+			if got := requests.Load(); got != 1 {
+				t.Errorf("expected exactly one request, got %d", got)
+			}
+		})
+	}
+}
+
+func TestIsCredentialsError(t *testing.T) {
+	tests := []struct {
+		msg  string
+		want bool
+	}{
+		{"api error InvalidAccessKeyId: The access key ID you provided does not exist", true},
+		{"api error SignatureDoesNotMatch: The request signature we calculated does not match", true},
+		{"api error AccessDenied: Access Denied.", true},
+		{"dial tcp 127.0.0.1:8333: connect: connection refused", false},
+		{"https response error StatusCode: 503, api error ServiceUnavailable", false},
+	}
+	for _, tt := range tests {
+		if got := isCredentialsError(errors.New(tt.msg)); got != tt.want {
+			t.Errorf("isCredentialsError(%q) = %v, want %v", tt.msg, got, tt.want)
+		}
 	}
 }
 

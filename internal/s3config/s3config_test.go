@@ -1,6 +1,7 @@
 package s3config
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"os"
@@ -228,6 +229,97 @@ func TestPutIdentityPreservesUnknownTopLevelFields(t *testing.T) {
 	}
 	if !strings.Contains(string(accounts), "acct-1") {
 		t.Errorf("accounts content was altered: %s", accounts)
+	}
+}
+
+// Identities carry fields this provisioner does not model, such as `account`
+// on an identity and `status` on a credential. Decoding every identity into
+// the typed struct would drop them from identities it never touched.
+func TestPutIdentityPreservesUnknownIdentityFields(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+
+	seed := `{"identities":[
+		{"name":"legacy","credentials":[{"accessKey":"legacy-key","secretKey":"legacy-secret","status":"Active"}],"actions":["Write:invoices"],"account":{"id":"finance"}},
+		{"name":"app-service","credentials":[{"accessKey":"old-key","secretKey":"old-secret","status":"Inactive"},{"accessKey":"app-key","secretKey":"stale","status":"Active"}],"actions":["Read"],"account":{"id":"apps"}}
+	]}`
+	if err := os.WriteFile(s.Path(), []byte(seed), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := s.PutIdentity(ctx, identity("app-service", "app-key", "Read", "Write")); err != nil {
+		t.Fatal(err)
+	}
+
+	var doc struct {
+		Identities []map[string]json.RawMessage `json:"identities"`
+	}
+	data, err := os.ReadFile(s.Path())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var compact bytes.Buffer
+	if err := json.Compact(&compact, data); err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(compact.Bytes(), &doc); err != nil {
+		t.Fatal(err)
+	}
+	if len(doc.Identities) != 2 {
+		t.Fatalf("expected 2 identities, got %d", len(doc.Identities))
+	}
+
+	// The untouched identity is byte-for-byte what it was, field order aside.
+	legacy := doc.Identities[0]
+	if got := string(legacy["account"]); got != `{"id":"finance"}` {
+		t.Errorf("legacy account = %s, want it preserved", got)
+	}
+	if !strings.Contains(string(legacy["credentials"]), `"status":"Active"`) {
+		t.Errorf("legacy credential status dropped: %s", legacy["credentials"])
+	}
+
+	// The managed identity takes name, credentials and actions from the config
+	// and keeps everything else. A credential keeps its unknown fields when its
+	// access key is still configured; one no longer configured is removed.
+	app := doc.Identities[1]
+	if got := string(app["account"]); got != `{"id":"apps"}` {
+		t.Errorf("app-service account = %s, want it preserved", got)
+	}
+	if got := string(app["actions"]); got != `["Read","Write"]` {
+		t.Errorf("app-service actions = %s, want the configured ones", got)
+	}
+	wantCreds := `[{"accessKey":"app-key","secretKey":"app-key-secret","status":"Active"}]`
+	if got := string(app["credentials"]); got != wantCreds {
+		t.Errorf("app-service credentials = %s, want %s", got, wantCreds)
+	}
+}
+
+// SeaweedFS documents identities with name, credentials and actions first;
+// keeping that order makes the generated file readable and diffable.
+func TestPutIdentityKeepsFieldOrder(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+
+	seed := `{"identities":[{"account":{"id":"apps"},"actions":["Read"],"credentials":[{"status":"Active","secretKey":"s","accessKey":"app-key"}],"name":"app-service"}]}`
+	if err := os.WriteFile(s.Path(), []byte(seed), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.PutIdentity(ctx, identity("app-service", "app-key", "Read")); err != nil {
+		t.Fatal(err)
+	}
+
+	data, err := os.ReadFile(s.Path())
+	if err != nil {
+		t.Fatal(err)
+	}
+	order := []string{`"name"`, `"credentials"`, `"accessKey"`, `"secretKey"`, `"status"`, `"actions"`, `"account"`}
+	last := -1
+	for _, key := range order {
+		i := strings.Index(string(data), key)
+		if i <= last {
+			t.Fatalf("key %s out of order in:\n%s", key, data)
+		}
+		last = i
 	}
 }
 

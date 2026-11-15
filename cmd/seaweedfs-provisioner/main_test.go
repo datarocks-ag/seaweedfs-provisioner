@@ -49,6 +49,10 @@ func TestResolveConfigMode(t *testing.T) {
 		{"explicit 0640", "0640", 0o640, false},
 		{"explicit 0600", "0600", 0o600, false},
 		{"bare octal without leading zero", "644", 0o644, false},
+		// The store treats a zero mode as the default; resolving it here keeps
+		// the startup log from reporting 0000 for a file written 0644.
+		{"zero means the default", "0", s3config.DefaultFileMode, false},
+		{"zero with leading zeros means the default", "0000", s3config.DefaultFileMode, false},
 		{"non-numeric", "not-a-mode", 0, true},
 		{"invalid octal digit", "0999", 0, true},
 	}

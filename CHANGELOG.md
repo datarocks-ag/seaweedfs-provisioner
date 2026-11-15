@@ -28,6 +28,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Writing an identity to `s3.config` dropped every field the provisioner does not model,
+  such as an identity's `account` or a credential's `status`, from every identity in the
+  file, including identities absent from the config. Unmanaged identities are now left as
+  they are; a configured identity keeps its other fields, and a credential keeps its other
+  fields while its access key is still configured.
+- The cluster phase retried rejected credentials (`InvalidAccessKeyId`,
+  `SignatureDoesNotMatch`, `AccessDenied`) like an unreachable gateway, so a wrong key failed
+  only after the five-minute connection budget with `connection timeout`. It now fails at
+  once with `connecting to SeaweedFS S3: credentials rejected: …`.
+- `SEAWEEDFS_S3_CONFIG_MODE=0` wrote the file with the default `0644` but logged
+  `"mode":"0000"`. The log now shows the mode the file gets.
 - A `${VAR}` reference to an unset environment variable stayed in the value as literal
   text and passed validation, so a missing key variable wrote the placeholder into
   `s3.config` as a working access or secret key. The run now fails with

@@ -460,12 +460,10 @@ within a total budget of 5 minutes. The budget runs out before the retry count o
 failure is logged as a warning, with the wait in nanoseconds:
 
 ```json
-{"level":"WARN","msg":"SeaweedFS S3 not ready, retrying","attempt":1,"max_retries":15,"delay":1000000000,"error":"operation error S3: ListBuckets, https response error StatusCode: 403, RequestID: 18E846221FDE374A4F0E1BB2, HostID: , api error SignatureDoesNotMatch: The request signature we calculated does not match the signature you provided. Check your key and signing method."}
+{"level":"WARN","msg":"SeaweedFS S3 not ready, retrying","attempt":1,"max_retries":15,"delay":1000000000,"error":"operation error S3: ListBuckets, https response error StatusCode: 0, RequestID: , HostID: , request send failed, Get \"http://seaweedfs:8333/?x-id=ListBuckets\": dial tcp: lookup seaweedfs on 127.0.0.11:53: no such host"}
 ```
 
-That line, captured on 2026-11-15, comes from a wrong secret key, not from an outage: **every
-error is retried**, including wrong keys and missing permissions. A credential problem
-therefore fails only after about 5 minutes, with:
+If the gateway is still unreachable when the budget runs out, the run fails with:
 
 ```text
 connecting to SeaweedFS S3: connection timeout: context deadline exceeded
@@ -474,10 +472,22 @@ connecting to SeaweedFS S3: connection timeout: context deadline exceeded
 (or `connection timeout after 5m0s: context deadline exceeded`, if the budget ends during a
 request rather than during a wait).
 
-Look at the `error` field of the first warning to tell a credential problem (a `403` such as
-`SignatureDoesNotMatch` above) from a gateway that isn't up yet. Only this first call is
-retried by the provisioner; a failure later in the run, such as a refused `CreateBucket`,
-fails the run without that retry.
+**Rejected credentials are not retried.** A gateway that answers `InvalidAccessKeyId`,
+`SignatureDoesNotMatch` or `AccessDenied` is up, so waiting can't change the answer. The run
+fails on the first answer, here with a wrong secret key (captured on 2026-11-15 against
+SeaweedFS 4.53):
+
+```json
+{"level":"ERROR","msg":"Provisioning failed","error":"connecting to SeaweedFS S3: credentials rejected: operation error S3: ListBuckets, https response error StatusCode: 403, RequestID: 18E84B03D7A4764C29EFC2E2, HostID: , api error SignatureDoesNotMatch: The request signature we calculated does not match the signature you provided. Check your key and signing method."}
+```
+
+`InvalidAccessKeyId` means SeaweedFS doesn't know the access key; `AccessDenied` here means no
+keys were sent, because `SEAWEEDFS_ACCESS_KEY` or `SEAWEEDFS_SECRET_KEY` is empty. Up to
+1.0.0, these were retried like an outage, and a wrong key failed only after about 5 minutes
+with `connection timeout`.
+
+Only this first call is retried by the provisioner; a failure later in the run, such as a
+refused `CreateBucket`, fails the run without that retry.
 
 The identities phase talks to no server and has no retry.
 
@@ -500,7 +510,8 @@ F1115 16:52:31.000477 auth_credentials.go:389 fail to load config file /seaweedf
 - It is parsed as an octal number: `0640` and `640` both work. Go-style `0o640` and symbolic
   modes such as `u=rw,g=r` are rejected:
   `parsing SEAWEEDFS_S3_CONFIG_MODE "0o640" as an octal file mode: strconv.ParseUint: parsing "0o640": invalid syntax`.
-- `0` means the default `0644`, although the startup log then shows `"mode":"0000"`.
+- `0` means the default `0644`, and the startup log shows `"mode":"0644"`. Up to 1.0.0, the
+  log showed `"mode":"0000"` for the same file.
 - The mode is applied on every write, also to an existing file, because the provisioner writes
   a new file and renames it over the old one.
 - It is only read when the config has identities and the phase is `identities` or `all`.

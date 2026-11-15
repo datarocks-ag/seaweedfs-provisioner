@@ -93,8 +93,9 @@ Output is trimmed; real lines also carry `time`:
 Every identity in the YAML is written on every run, changed or not.
 
 Use `--phase=identities`, not `all`. In `all`, the provisioner connects to the S3 gateway
-first and writes `s3.config` only after that succeeds. If the gateway is down or rejects
-the admin key, nothing is written, and the run retries for up to five minutes:
+first and writes `s3.config` only after that succeeds. If the gateway rejects the admin key,
+the run fails at once; if it is down, the run retries for up to five minutes. Either way
+nothing is written:
 
 ```json
 {"level":"INFO","msg":"Configuration loaded","phase":"all","buckets":2,"identities":2,"policies":0}
@@ -151,59 +152,13 @@ $ docker compose exec seaweedfs cat /seaweedfs-config/s3.json
 
 ## Pitfalls
 
-- **Extra fields on identities are dropped.** The merge keeps identities that are not in
-  the YAML and unknown top-level keys such as `accounts`, but it writes every identity back
-  with only `name`, `credentials` and `actions`. In the test, `s3.config` held a hand-made
-  identity with an `account` field and a credential `status`:
-
-  ```json
-  {
-    "identities": [
-      {
-        "name": "legacy-importer",
-        "credentials": [{"accessKey": "legacy-key", "secretKey": "legacy-secret", "status": "Active"}],
-        "actions": ["Write:invoices"],
-        "account": {"id": "finance", "displayName": "Finance"}
-      }
-    ],
-    "accounts": [
-      {"id": "finance", "displayName": "Finance", "emailAddress": "finance@example.com"}
-    ]
-  }
-  ```
-
-  (trimmed: `admin` and `reports-app` omitted). After the identities phase, `accounts` and
-  the identity are still there, but `account` and `status` are gone, and the top-level keys
-  are in alphabetical order:
-
-  ```json
-  {
-    "accounts": [
-      {
-        "id": "finance",
-        "displayName": "Finance",
-        "emailAddress": "finance@example.com"
-      }
-    ],
-    "identities": [
-      …
-      {
-        "name": "legacy-importer",
-        "credentials": [
-          {
-            "accessKey": "legacy-key",
-            "secretKey": "legacy-secret"
-          }
-        ],
-        "actions": [
-          "Write:invoices"
-        ]
-      }
-    ]
-  }
-  ```
-
-  If you rely on such fields, don't let the provisioner write that file.
+- **Extra fields on identities are kept, removed credentials are not.** The merge keeps
+  identities that are not in the YAML, unknown top-level keys such as `accounts`, and fields
+  such as `account` on any identity. A credential's own fields, such as `status`, stay as
+  long as its access key is in the YAML; a credential you remove disappears with them. Up
+  to 1.0.0, the provisioner dropped `account`, `status` and every other unknown field from
+  every identity on each write. See
+  [Will the provisioner overwrite my admin identity or accounts?](../faq.md#will-the-provisioner-overwrite-my-admin-identity-or-accounts)
 - **Removing an identity from the YAML doesn't remove it from `s3.config`.** The provisioner
   never deletes identities. Edit `s3.config` by hand, for example with a one-off container
   that mounts the volume, and restart SeaweedFS.

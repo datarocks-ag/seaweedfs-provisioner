@@ -2,6 +2,7 @@ package client
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"math"
@@ -26,7 +27,14 @@ type S3Client struct {
 	Client *s3.Client
 }
 
-// ConnectS3 establishes an S3 connection with exponential backoff retry.
+// ErrCredentialsRejected is returned by ConnectS3 when the gateway answers but
+// refuses the credentials. It is not retried: the gateway is up, so waiting
+// cannot change the answer.
+var ErrCredentialsRejected = errors.New("credentials rejected")
+
+// ConnectS3 establishes an S3 connection with exponential backoff retry. A
+// gateway that is unreachable or failing is retried for up to totalTimeout; one
+// that rejects the credentials fails at once with ErrCredentialsRejected.
 func ConnectS3(ctx context.Context, endpoint, accessKey, secretKey, region string) (*S3Client, error) {
 	ctx, cancel := context.WithTimeout(ctx, totalTimeout)
 	defer cancel()
@@ -51,6 +59,10 @@ func ConnectS3(ctx context.Context, endpoint, accessKey, secretKey, region strin
 		if err == nil {
 			slog.Info("Connected to SeaweedFS S3", "endpoint", endpoint)
 			return sc, nil
+		}
+
+		if isCredentialsError(err) {
+			return nil, fmt.Errorf("%w: %w", ErrCredentialsRejected, err)
 		}
 
 		if ctx.Err() != nil {
@@ -241,6 +253,15 @@ func (c *S3Client) PutBucketLifecycle(ctx context.Context, name string, rules []
 // isNoSuchLifecycleError checks if the error indicates no lifecycle is configured.
 func isNoSuchLifecycleError(err error) bool {
 	return strings.Contains(err.Error(), "NoSuchLifecycleConfiguration")
+}
+
+// isCredentialsError reports whether the gateway refused the request's
+// credentials: an unknown access key, a wrong secret key, or no keys where the
+// gateway requires them.
+func isCredentialsError(err error) bool {
+	return strings.Contains(err.Error(), "InvalidAccessKeyId") ||
+		strings.Contains(err.Error(), "SignatureDoesNotMatch") ||
+		strings.Contains(err.Error(), "AccessDenied")
 }
 
 // isNotFoundError checks if the error is a 404/NotFound type.

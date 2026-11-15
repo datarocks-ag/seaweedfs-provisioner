@@ -141,9 +141,9 @@ $ aws --endpoint-url http://localhost:8333 s3 ls s3://reports/
 
 The admin key has two consumers that must agree: the YAML, which puts the key into
 `s3.config`, and `SEAWEEDFS_ACCESS_KEY` / `SEAWEEDFS_SECRET_KEY`, which the cluster phase
-logs in with. If the cluster phase gets a key SeaweedFS doesn't know, it doesn't fail fast:
-it retries `InvalidAccessKeyId` for five minutes and then exits with
-`connecting to SeaweedFS S3: connection timeout: context deadline exceeded`. See
+logs in with. If the cluster phase gets a key SeaweedFS doesn't know, it fails at once with
+`credentials rejected` and `InvalidAccessKeyId`, and provisions nothing. (Up to 1.0.0, it
+retried for five minutes and then exited with `connection timeout`.) See
 [Set up the admin identity the provisioner logs in with](set-up-the-admin-identity.md).
 
 Use the same two rounds, and switch the cluster phase only while SeaweedFS knows both keys:
@@ -177,12 +177,12 @@ Use the same two rounds, and switch the cluster phase only while SeaweedFS knows
    phase that still uses the old pair now gets `InvalidAccessKeyId`:
 
    ```json
-   {"level":"WARN","msg":"SeaweedFS S3 not ready, retrying","attempt":1,"max_retries":15,"delay":1000000000,"error":"operation error S3: ListBuckets, https response error StatusCode: 403, RequestID: 18E84656C7C843CDDA6197D0, HostID: , api error InvalidAccessKeyId: The access key ID you provided does not exist in our records."}
+   {"level":"ERROR","msg":"Provisioning failed","error":"connecting to SeaweedFS S3: credentials rejected: operation error S3: ListBuckets, https response error StatusCode: 403, RequestID: 18E84B03D8091D737E0C5DC0, HostID: , api error InvalidAccessKeyId: The access key ID you provided does not exist in our records."}
    ```
 
 The order matters in step 2. Pointing the cluster phase at the new key before SeaweedFS has
 restarted with it, or removing the old key from the YAML while the cluster phase still uses
-it, produces the five-minute retry.
+it, makes the cluster phase fail with `InvalidAccessKeyId`.
 
 ## Pitfalls
 
