@@ -188,7 +188,7 @@ $ AWS_ACCESS_KEY_ID=<admin-access-key> AWS_SECRET_ACCESS_KEY=<admin-secret-key> 
 - **Extra fields on identities with 1.0.0.** Up to 1.0.0, the provisioner rewrote every
   identity with only `name`, `credentials` (`accessKey`, `secretKey`) and `actions`, so a
   field such as `account` on an identity, or `status` on a credential, was gone after the
-  next identities phase. Later releases keep those fields; see
+  next identities phase. 1.0.1 and later keep those fields; see
   [Will the provisioner overwrite my admin identity or accounts?](../faq.md#will-the-provisioner-overwrite-my-admin-identity-or-accounts)
 - **Changing the admin key.** The YAML and `SEAWEEDFS_ACCESS_KEY` / `SEAWEEDFS_SECRET_KEY`
   have to change together, in a fixed order. See
