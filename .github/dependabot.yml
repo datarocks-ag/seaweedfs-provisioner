@@ -32,14 +32,12 @@ updates:
     commit-message:
       prefix: "ci"
     groups:
-      # checkout/setup-go/upload-artifact are used in every job of both workflows.
+      # Actions don't pin each other, and nearly every bump is a major (Node
+      # runtime). CI exercises them all, so one PR is enough to review. Grouping
+      # by owner left third-party actions (codecov, goreleaser) as separate PRs.
       github-actions:
         patterns:
-          - "actions/*"
-      # buildx, build-push, login and metadata are used together in release.yaml.
-      docker-actions:
-        patterns:
-          - "docker/*"
+          - "*"
     ignore:
       # Dependabot proposed a non-existent major "v2201" for this action in
       # postgres-provisioner, which broke its release workflow. Major updates need a
