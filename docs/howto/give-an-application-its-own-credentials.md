@@ -76,9 +76,9 @@ environment, so add them to the `seaweedfs-identities` service:
       REPORTS_SECRET_KEY: ${REPORTS_SECRET_KEY}
 ```
 
-If one of them is missing, the placeholder is written into `s3.config` as the key itself.
-[Keep access keys out of the config file](keep-access-keys-out-of-the-config.md) shows how
-to catch that.
+If one of them is missing, the identities phase fails with
+`environment variable "REPORTS_ACCESS_KEY" is not set` and writes nothing; see
+[Keep access keys out of the config file](keep-access-keys-out-of-the-config.md).
 
 ### 3. Run the identities phase and restart SeaweedFS
 
@@ -164,7 +164,7 @@ $ aws --endpoint-url http://localhost:8333 s3 ls
 ```
 
 `InvalidAccessKeyId` instead of a result means SeaweedFS hasn't loaded the identity: restart
-it, or check `s3.config` for a literal `${…}` placeholder.
+it. With 1.0.0, also check `s3.config` for a literal `${…}` placeholder.
 
 ## Pitfalls
 

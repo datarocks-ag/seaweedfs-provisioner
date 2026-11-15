@@ -126,7 +126,7 @@ Read in this order if you're new; jump straight to a how-to if you know what you
 | &nbsp;&nbsp;[Give an application its own credentials](docs/howto/give-an-application-its-own-credentials.md) | An access key limited to one bucket. |
 | &nbsp;&nbsp;[Change identities on a running cluster](docs/howto/change-identities-on-a-running-cluster.md) | Rewrite `s3.config` and restart SeaweedFS; what survives the rewrite. |
 | &nbsp;&nbsp;[Rotate an access key without downtime](docs/howto/rotate-an-access-key.md) | Two keys side by side across two restarts, including the admin key. |
-| &nbsp;&nbsp;[Keep access keys out of the config file](docs/howto/keep-access-keys-out-of-the-config.md) | `${VAR}` fed from Docker Compose and Kubernetes secrets, and catching an unset variable. |
+| &nbsp;&nbsp;[Keep access keys out of the config file](docs/howto/keep-access-keys-out-of-the-config.md) | `${VAR}` fed from Docker Compose and Kubernetes secrets, and the error for a missing one. |
 | &nbsp;&nbsp;[Expire objects with lifecycle rules](docs/howto/expire-objects-with-lifecycle-rules.md) | Expiry by prefix, changing and disabling rules. |
 | &nbsp;&nbsp;[Control bucket access with a policy](docs/howto/control-bucket-access-with-a-policy.md) | A bucket policy file, the principal format SeaweedFS matches, and how it combines with identity actions. |
 | &nbsp;&nbsp;[Restrict who can read s3.config](docs/howto/restrict-who-can-read-s3-config.md) | A tighter file mode that SeaweedFS can still read. |
