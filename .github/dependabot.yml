@@ -1,53 +1,112 @@
+# Dependabot: datarocks convention (https://github.com/datarocks-ag/github-actions/blob/develop/docs/dependabot.md).
+# Weekly on Monday, labels `dependencies` + the ecosystem, `chore(deps)` commits. Release-together
+# families and then all remaining minor and patch updates are grouped; major and security updates
+# arrive as PRs of their own.
 version: 2
 updates:
   - package-ecosystem: gomod
     directory: /
     schedule:
       interval: weekly
+      day: monday
+      time: "05:00"
+      timezone: Europe/Zurich
+    labels:
+      - dependencies
+      - go
     commit-message:
-      prefix: "deps"
+      prefix: chore(deps)
     groups:
       # The AWS SDK modules and smithy-go are released together and depend on each
       # other's exact versions; separate PRs conflict on go.mod/go.sum.
       aws-sdk:
         patterns:
-          - "github.com/aws/*"
+          - github.com/aws/*
       # testcontainers-go and its modules are released together and must be bumped
       # together; separate PRs conflict on go.mod/go.sum.
       testcontainers:
         patterns:
-          - "github.com/testcontainers/testcontainers-go*"
+          - github.com/testcontainers/testcontainers-go*
       # Security updates mostly hit indirect dependencies pulled in by testcontainers
       # and the golangci-lint tool (otel, moby, compress). One PR per CVE produced a
       # pile of conflicting go.sum changes, so batch them.
       security:
         applies-to: security-updates
         patterns:
-          - "*"
+          - '*'
+      minor-and-patch:
+        patterns:
+          - '*'
+        update-types:
+          - minor
+          - patch
 
   - package-ecosystem: github-actions
     directory: /
     schedule:
       interval: weekly
+      day: monday
+      time: "05:00"
+      timezone: Europe/Zurich
+    labels:
+      - dependencies
+      - github_actions
     commit-message:
-      prefix: "ci"
+      prefix: chore(deps)
+    ignore:
+      # Dependabot proposed a non-existent major "v2201" for this action in
+      # postgres-provisioner, which broke its release workflow. Major updates need a
+      # manual review.
+      - dependency-name: vladopajic/go-test-coverage
+        update-types: [version-update:semver-major]
+
     groups:
       # Actions don't pin each other, and nearly every bump is a major (Node
       # runtime). CI exercises them all, so one PR is enough to review. Grouping
       # by owner left third-party actions (codecov, goreleaser) as separate PRs.
       github-actions:
         patterns:
-          - "*"
-    ignore:
-      # Dependabot proposed a non-existent major "v2201" for this action in
-      # postgres-provisioner, which broke its release workflow. Major updates need a
-      # manual review.
-      - dependency-name: "vladopajic/go-test-coverage"
-        update-types: ["version-update:semver-major"]
+          - '*'
+        update-types:
+          - minor
+          - patch
 
   - package-ecosystem: docker
     directory: /
     schedule:
       interval: weekly
+      day: monday
+      time: "05:00"
+      timezone: Europe/Zurich
+    labels:
+      - dependencies
+      - docker
     commit-message:
-      prefix: "docker"
+      prefix: chore(deps)
+    groups:
+      minor-and-patch:
+        patterns:
+          - '*'
+        update-types:
+          - minor
+          - patch
+
+  - package-ecosystem: docker-compose
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: "05:00"
+      timezone: Europe/Zurich
+    labels:
+      - dependencies
+      - docker
+    commit-message:
+      prefix: chore(deps)
+    groups:
+      minor-and-patch:
+        patterns:
+          - '*'
+        update-types:
+          - minor
+          - patch
